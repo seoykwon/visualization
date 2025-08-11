@@ -1,6 +1,11 @@
 # 🗺️ Visualization of Seoul Accessibility Map
 ‼️ DO NOT DIRECTLY MERGE / COMMIT TO THE MAIN BRANCH ‼️  
 
+### **Find the position**  
+1. ```cd Desktop```
+2. ```cd visualization```
+3. ```code .```
+   
 ### **Setup**  
 1. **BACKEND** (macOS / Linux)
       - navigate yourself to appropriate directory. ```cd backend```  
