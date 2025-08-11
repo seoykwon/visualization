@@ -6,7 +6,7 @@
 2. ```cd visualization```
 3. ```code .```
    
-### **Setup**  
+### ⊆ **Setup**  
 1. **BACKEND** (macOS / Linux)
       - navigate yourself to appropriate directory. ```cd backend```  
       - [🌟 only once] make your python virtual environment. if you already have one, you can skip this step. ```python3 -m venv venv```  
@@ -36,4 +36,4 @@
       - compare branch: ```my-branch-name```
       - fill in title + description, click **Create pull request**  
 
-### **Source Tree**  
+### 🌳 **Source Tree**  
