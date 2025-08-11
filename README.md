@@ -16,7 +16,7 @@
 
 2. **FRONTEND** (macOS / Linux)
       - navigate ```cd frontend```
-      - install required dependencies. ```npm install```
+      - [🌟 only once] install required dependencies. ```npm install```
       - run your UI/UX. ```npm start```  
 
 3. **CREATE YOUR BRANCH**
