@@ -9,9 +9,9 @@
 ### **Setup**  
 1. **BACKEND** (macOS / Linux)
       - navigate yourself to appropriate directory. ```cd backend```  
-      - make your python virtual environment. if you already have one, you can skip this step. ```python3 -m venv venv```  
+      - [🌟 only once] make your python virtual environment. if you already have one, you can skip this step. ```python3 -m venv venv```  
       - activate your virtual environment. ```source venv/bin/activate```  
-      - download all the required dependencies. ```pip install -r requirements.txt```
+      - [🌟 only once] download all the required dependencies. ```pip install -r requirements.txt```
       - run your server. ```python3 app.py```  
 
 2. **FRONTEND** (macOS / Linux)
@@ -20,7 +20,7 @@
       - run your UI/UX. ```npm start```  
 
 3. **CREATE YOUR BRANCH**
-      - ```git checkout main```  
+      - ```git main```  
       - ```git pull origin main``` / ```git pull```
       - ```git checkout -b feature-name```
       - ```git push -u origin feature-name```
@@ -35,3 +35,5 @@
       - base branch: ```main```
       - compare branch: ```my-branch-name```
       - fill in title + description, click **Create pull request**  
+
+### **Source Tree**  
