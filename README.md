@@ -37,3 +37,13 @@
       - fill in title + description, click **Create pull request**  
 
 ### 🌳 **Source Tree**  
+1. **Clone or add your existing repo**
+      - click clone
+      - paste your repo's HTTPS or SSH URL
+
+2. **Workflow in Sourcetree**
+      - **Fetch** -> update remote branch list
+      - **Checkout** -> switch to branch
+      - **Commit** -> stage changes & commit
+      - **Push** -> send branch to remote
+      - **Create pull / Merge request** -> right-click branch -> "create pull request"  
