@@ -1,4 +1,6 @@
 # 🗺️ Visualization of Seoul Accessibility Map
+‼️ DO NOT DIRECTLY MERGE / COMMIT TO THE MAIN BRANCH ‼️  
+
 ### **Setup**  
 1. **BACKEND** (macOS / Linux)
       - navigate yourself to appropriate directory. ```cd backend```  
@@ -11,3 +13,20 @@
       - navigate ```cd frontend```
       - install required dependencies. ```npm install```
       - run your UI/UX. ```npm start```  
+
+3. **CREATE YOUR BRANCH**
+      - ```git checkout main```  
+      - ```git pull origin main``` / ```git pull```
+      - ```git checkout -b feature-name```
+      - ```git push -u origin feature-name```
+  
+4. **ADD/COMMIT YOUR CODE**
+      - ```git add .```
+      - ```git commit -m "commit messages"```
+
+5. **SEND MERGE REQUEST**
+      - go to your repository page
+      - "compare & pull request"
+      - base branch: ```main```
+      - compare branch: ```my-branch-name```
+      - fill in title + description, click **Create pull request**  
