@@ -121,6 +121,8 @@ function App() {
   const [reachableStations, setReachableStations] = useState([]);
   const [nearestStation, setNearestStation] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [contourImage, setContourImage] = useState('');
+  const [contourLoading, setContourLoading] = useState(false);
   
   // 백엔드를 통한 카카오 역지오코딩
  // 백엔드를 통한 카카오 역지오코딩
@@ -156,15 +158,19 @@ const reverseGeocode = async (lat: string, lng: string): Promise<string> => {
    // 가장 가까운 지하철역 찾기
   const findNearestStation = async (lat, lng) => {
     try {
+      console.log('가장 가까운 역 찾기 요청:', { lat, lng });
       const response = await axios.post('http://localhost:5000/api/nearest-station', {
         lat,
         lng
       });
       
+      console.log('가장 가까운 역 응답:', response.data);
       setNearestStation(response.data);
     } catch (error) {
       console.error('가장 가까운 역 찾기 실패:', error);
       setNearestStation(null);
+      // 사용자에게 오류 메시지 표시
+      setErrorMessage('가장 가까운 역을 찾을 수 없습니다. 백엔드 서버를 확인해주세요.');
     }
   };
 
@@ -173,11 +179,15 @@ const reverseGeocode = async (lat: string, lng: string): Promise<string> => {
     if (!address.trim()) return;
     
     setLoading(true);
+    setErrorMessage(null);
+    
     try {
+      console.log('주소 검색 요청:', address);
       const response = await axios.post('http://localhost:5000/api/geocode', {
         address
       });
 
+      console.log('주소 검색 응답:', response.data);
       const newCoords = { lat: response.data.lat, lng: response.data.lng };
       setCoords(newCoords);
       setErrorMessage(null);
@@ -189,7 +199,11 @@ const reverseGeocode = async (lat: string, lng: string): Promise<string> => {
       console.error('검색 실패:', error);
       setCoords(null);
       setNearestStation(null);
-      setErrorMessage('주소 또는 장소를 찾을 수 없습니다.');
+      if (error.response?.status === 500) {
+        setErrorMessage('백엔드 서버 오류가 발생했습니다. 서버를 확인해주세요.');
+      } else {
+        setErrorMessage('주소 또는 장소를 찾을 수 없습니다.');
+      }
     } finally {
       setLoading(false);
     }
@@ -198,6 +212,32 @@ const reverseGeocode = async (lat: string, lng: string): Promise<string> => {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       handleSearch();
+    }
+  };
+
+  // 등고선 생성 함수
+  const generateContour = async () => {
+    if (!coords) {
+      alert('먼저 지도에서 위치를 선택해주세요.');
+      return;
+    }
+    
+    setContourLoading(true);
+    try {
+      const response = await axios.post('http://localhost:5000/api/contour-plot', {
+        lat: parseFloat(coords.lat),
+        lng: parseFloat(coords.lng),
+        radius_km: 50
+      });
+      
+      if (response.data.image) {
+        setContourImage(`data:image/png;base64,${response.data.image}`);
+      }
+    } catch (error) {
+      console.error('등고선 생성 실패:', error);
+      alert('등고선 생성에 실패했습니다.');
+    } finally {
+      setContourLoading(false);
     }
   };
 
@@ -477,6 +517,63 @@ const reverseGeocode = async (lat: string, lng: string): Promise<string> => {
             <span style={{ color: 'red', marginLeft: '10px' }}>● 30분 초과</span>
             <span style={{ color: '#0066FF', marginLeft: '10px' }}>🚇 가장 가까운 역</span>
             <span style={{ color: '#FF6B35', marginLeft: '10px' }}>P 선택한 위치</span>
+          </div>
+        )}
+
+        {/* 등고선 생성 섹션 */}
+        {coords && (
+          <div style={{ 
+            marginTop: '20px', 
+            padding: '20px', 
+            backgroundColor: '#f9f9f9', 
+            borderRadius: '8px',
+            textAlign: 'center'
+          }}>
+            <h3 style={{ marginBottom: '15px', color: '#333' }}>
+              🗺️ 지하철 소요시간 등고선 생성
+            </h3>
+            <p style={{ marginBottom: '15px', color: '#666', fontSize: '14px' }}>
+              선택한 위치를 중심으로 20분 간격의 등고선을 생성합니다 (20-100분)
+            </p>
+            
+            <button
+              onClick={generateContour}
+              disabled={contourLoading}
+              style={{
+                padding: '12px 24px',
+                backgroundColor: '#4CAF50',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: contourLoading ? 'not-allowed' : 'pointer',
+                fontSize: '16px',
+                fontWeight: 'bold',
+                opacity: contourLoading ? 0.6 : 1
+              }}
+            >
+              {contourLoading ? '생성 중...' : '등고선 생성하기'}
+            </button>
+
+            {/* 등고선 이미지 표시 */}
+            {contourImage && (
+              <div style={{ marginTop: '20px' }}>
+                <h4 style={{ marginBottom: '10px', color: '#333' }}>생성된 등고선</h4>
+                <img 
+                  src={contourImage} 
+                  alt="지하철 소요시간 등고선" 
+                  style={{ 
+                    maxWidth: '100%', 
+                    height: 'auto', 
+                    border: '2px solid #ddd',
+                    borderRadius: '8px',
+                    boxShadow: '0 4px 8px rgba(0,0,0,0.1)'
+                  }} 
+                />
+                <p style={{ marginTop: '10px', fontSize: '12px', color: '#666' }}>
+                  💡 파스텔 핑크-퍼플 색상으로 20분 간격의 소요시간을 표시합니다
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>
