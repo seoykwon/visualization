@@ -7,6 +7,10 @@ from dotenv import load_dotenv
 from haversine import haversine
 from flask_cors import CORS
 
+from coords import StationCoords
+from times import PrecomputedTimes
+from isochrone import polygons_from_station_times, build_featurecollection
+
 # Load API keys
 load_dotenv()
 ODSAY_KEY = os.getenv("ODSAY_API_KEY")
@@ -15,46 +19,40 @@ app = Flask(__name__)
 # CORS(app)
 CORS(app, resources={r"/api/*": {"origins": "http://localhost:3000"}})
 
-# Load station coordinates from JSON
-with open("station_coords.json", encoding='utf-8') as f:
-    STATIONS = json.load(f)
+# 1) 역 좌표 & KD-tree (최근접역)
+COORDS = StationCoords()
+# 2) 미리 계산된 '역↔역 분단위 최단시간' CSV 로더
+TIMES  = PrecomputedTimes()  # 기본 경로: backend/data/station_travel_times.csv
 
-# 사용자 클릭 위치에서 가장 가까운 역 찾기
-def find_nearest_station(user_lat, user_lng):
-    user_loc = (user_lat, user_lng)
-    nearest = min(
-        STATIONS,
-        key=lambda station: haversine(user_loc, (float(station["lat"]), float(station["lng"])))
-    )
-    return nearest
+@app.route("/api/isochrone", methods=["POST"])
+def api_isochrone():
+    """
+    입력(JSON): { lat, lng, thresholds?: [20,40,60,80,100], buffer_m?: 300 }
+    출력: GeoJSON FeatureCollection
+    """
+    data = request.get_json(force=True)
+    lat = float(data["lat"])
+    lng = float(data["lng"])
+    thresholds = data.get("thresholds") or [20, 40, 60, 80, 100]
+    buffer_m   = int(data.get("buffer_m", 300))
 
-# 출발역에서 모든 지하철역까지의 소요시간 계산
-def get_subway_times_from(start_lat, start_lng):
-    results = []
-    for station in STATIONS:
-        url = f"https://api.odsay.com/v1/api/searchPubTransPathT?"
-        params = {
-            "SX": start_lng,
-            "SY": start_lat,
-            "EX": station["lng"],
-            "EY": station["lat"],
-            "OPT": 0,
-            "apiKey": ODSAY_KEY
-        }
-        res = requests.get(url, params=params)
-        if res.status_code != 200:
-            continue
-        try:
-            time = res.json()["result"]["path"][0]["info"]["totalTime"]
-            results.append({
-                "name": station["name"],
-                "lat": station["lat"],
-                "lng": station["lng"],
-                "time": time
-            })
-        except (KeyError, IndexError):
-            continue
-    return results
+    # 1) 클릭점에서 가장 가까운 '원점 역'
+    origin = COORDS.nearest_station(lat, lng)
+
+    # 2) (계산 X) 미리 계산된 CSV에서 원점 기준 {역:분} 읽기
+    station_times = TIMES.times_from(origin)
+
+    # 3) 20/40/60/80/100분 밴드별 역세권 버퍼 합집합 → GeoJSON
+    bands = polygons_from_station_times(station_times, COORDS.station_pos,
+                                        thresholds=thresholds,
+                                        buffer_m_per_station=buffer_m)
+    fc = build_featurecollection(bands)
+    return jsonify(fc)
+
+@app.route("/api/health", methods=["GET"])
+def health():
+    return {"ok": True}
+
 
 # 📍 API: 좌표 받아서 소요 시간 반환
 @app.route("/api/subway-times", methods=["POST"])
