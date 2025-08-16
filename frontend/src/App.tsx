@@ -6,7 +6,9 @@ import {
   useMapEvents,
   Marker,
   Popup,
-  useMap
+  useMap,
+  Circle,
+  Polygon
 } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import { LeafletMouseEvent } from 'leaflet';
@@ -74,6 +76,166 @@ function getSelectedLocationIcon() {
   });
 }
 
+// 등고선을 그리는 컴포넌트
+interface Station {
+  name: string;
+  lat: number;
+  lng: number;
+  time: number;
+}
+
+interface ContourData {
+  [timeKey: string]: {
+    time_limit: number;
+    stations: Station[];
+    count: number;
+    center_lat?: number; // 등고선 중심 좌표
+    center_lng?: number; // 등고선 중심 좌표
+  };
+}
+
+function ContourLines({ contourData, nearestStation }: { 
+  contourData: ContourData | null; 
+  nearestStation: any; 
+}) {
+  if (!contourData || !nearestStation) return null;
+  
+  const timeColors: { [key: string]: string } = {
+    '10분': '#00FF00',    // 초록색
+    '20분': '#32CD32',    // 라임그린
+    '30분': '#FFFF00',    // 노란색
+    '40분': '#FFA500',    // 주황색
+    '50분': '#FF4500'     // 빨간색
+  };
+  
+  console.log('ContourLines 렌더링:', contourData);
+  
+  if (!contourData || typeof contourData !== 'object') {
+    console.log('ContourLines: 데이터 없음');
+    return null;
+  }
+  
+  const timeKeys = Object.keys(contourData);
+  console.log('ContourLines: 데이터 있음, 역 개수:', timeKeys.map(k => `${k}: ${contourData[k].count}개`));
+  
+  return (
+    <>
+      {timeKeys.map((timeKey) => {
+        const data = contourData[timeKey];
+        const color = timeColors[timeKey] || '#000000';
+        
+        // 시간대별로 투명도 조정 (겹치지 않도록)
+        const opacity = timeKey === '10분' ? 0.8 : 
+                      timeKey === '20분' ? 0.7 : 
+                      timeKey === '30분' ? 0.6 : 
+                      timeKey === '40분' ? 0.5 : 0.4;
+        
+        if (!data.stations || !Array.isArray(data.stations)) {
+          console.log(`ContourLines: ${timeKey} 데이터 문제`, data);
+          return null;
+        }
+        
+        console.log(`ContourLines: ${timeKey} 렌더링 중, ${data.count}개 역`);
+        
+        // 구불구불한 등고선을 그리기 위한 다각형 생성
+        if (data.stations.length > 2) {
+          // 역들을 연결한 경계선 좌표 생성
+          const coordinates = data.stations.map(station => [station.lat, station.lng]);
+          
+          // Convex Hull 알고리즘을 사용하여 경계선 생성
+          // 간단한 버전: 중앙점에서 가장 먼 역들을 연결
+          const centerLat = data.center_lat || nearestStation.lat;
+          const centerLng = data.center_lng || nearestStation.lng;
+          
+          // 중앙에서 가장 먼 역들을 찾아서 경계선 생성
+          const boundaryStations = [];
+          const angles = [];
+          
+          data.stations.forEach(station => {
+            if (station.name !== nearestStation.name) {
+              const angle = Math.atan2(
+                station.lat - centerLat,
+                station.lng - centerLng
+              );
+              angles.push({ angle, station });
+            }
+          });
+          
+          // 각도별로 정렬하여 경계선 생성
+          angles.sort((a, b) => a.angle - b.angle);
+          const boundaryCoords = angles.map(item => [item.station.lat, item.station.lng]);
+          
+          // 시작 역을 경계선에 추가
+          boundaryCoords.unshift([centerLat, centerLng]);
+          boundaryCoords.push([centerLat, centerLng]); // 닫힌 다각형
+          
+          return (
+            <Polygon
+              key={`contour-${timeKey}`}
+              positions={boundaryCoords}
+              pathOptions={{
+                color: color,
+                fillColor: color,
+                fillOpacity: opacity,
+                weight: 2
+              }}
+            />
+          );
+        }
+        
+        return null;
+      })}
+    </>
+  );
+}
+
+// 등고선 범례 컴포넌트
+function ContourLegend({ contourData }: { contourData: ContourData | null }) {
+  if (!contourData) return null;
+
+  const timeColors: { [key: string]: string } = {
+    '20분': '#00FF00',
+    '40분': '#FFFF00',
+    '60분': '#FFA500',
+    '80분': '#FF4500',
+    '100분': '#8B0000'
+  };
+
+  return (
+    <div style={{
+      position: 'absolute',
+      top: '10px',
+      right: '10px',
+      backgroundColor: 'white',
+      padding: '10px',
+      borderRadius: '5px',
+      boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
+      zIndex: 1000,
+      minWidth: '150px'
+    }}>
+      <h4 style={{ margin: '0 0 10px 0', fontSize: '14px' }}>도달 시간 등고선</h4>
+      {Object.entries(contourData).map(([timeKey, data]) => (
+        <div key={timeKey} style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          marginBottom: '5px',
+          fontSize: '12px'
+        }}>
+          <div style={{
+            width: '15px',
+            height: '15px',
+            backgroundColor: timeColors[timeKey],
+            borderRadius: '50%',
+            marginRight: '8px',
+            opacity: 0.7
+          }} />
+          <span>{timeKey}: {data.count}개 역</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function MapCenterUpdater({ coords }) {
   const map = useMap();
 
@@ -118,12 +280,11 @@ function App() {
   const [address, setAddress] = useState('');
   const [coords, setCoords] = useState(null);
   const [errorMessage, setErrorMessage] = useState(null);
-  const [reachableStations, setReachableStations] = useState([]);
   const [nearestStation, setNearestStation] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [contourData, setContourData] = useState<ContourData | null>(null);
   
   // 백엔드를 통한 카카오 역지오코딩
- // 백엔드를 통한 카카오 역지오코딩
 const reverseGeocode = async (lat: string, lng: string): Promise<string> => {
   try {
     console.log('역지오코딩 요청:', { lat, lng });
@@ -162,9 +323,35 @@ const reverseGeocode = async (lat: string, lng: string): Promise<string> => {
       });
       
       setNearestStation(response.data);
+      console.log('가장 가까운 역:', response.data);
+      
+      // 등고선 데이터 가져오기
+      if (response.data.name) {
+        try {
+          console.log('등고선 데이터 요청 중... 역명:', response.data.name);
+          const contourResponse = await axios.post('http://localhost:5000/api/contour-data', {
+            station_name: response.data.name
+          });
+          console.log('등고선 데이터 응답:', contourResponse.data);
+          
+          // 등고선 데이터 구조 확인
+          if (contourResponse.data) {
+            console.log('등고선 데이터 키들:', Object.keys(contourResponse.data));
+            Object.entries(contourResponse.data).forEach(([timeKey, data]) => {
+              console.log(`${timeKey}: ${data.count}개 역`);
+            });
+          }
+          
+          setContourData(contourResponse.data);
+        } catch (error) {
+          console.error('등고선 데이터 가져오기 실패:', error);
+          setContourData(null);
+        }
+      }
     } catch (error) {
       console.error('가장 가까운 역 찾기 실패:', error);
       setNearestStation(null);
+      setContourData(null);
     }
   };
 
@@ -214,20 +401,8 @@ const reverseGeocode = async (lat: string, lng: string): Promise<string> => {
       console.error('역지오코딩 실패:', error);
     }
     
-    // 가장 가까운 지하철역 찾기
+    // 가장 가까운 지하철역 찾기 (등고선 데이터도 함께 가져옴)
     await findNearestStation(lat, lng);
-
-    // 접근 가능한 모든 역 계산
-    try {
-      const response = await axios.post('http://localhost:5000/api/accessible', {
-        lat,
-        lng
-      });
-      
-      setReachableStations(response.data);
-    } catch (error) {
-      console.error('접근 가능 영역 계산 실패:', error);
-    }
   };
 
   return (
@@ -357,6 +532,16 @@ const reverseGeocode = async (lat: string, lng: string): Promise<string> => {
               ) ?? '—'}
               km)
             </span>
+            {contourData && (
+              <div style={{ marginTop: '5px', fontSize: '12px', color: '#28a745' }}>
+                ✅ 등고선 데이터 로드 완료: {Object.entries(contourData).map(([k, v]) => `${k}(${v.count}개)`).join(', ')}
+              </div>
+            )}
+            {!contourData && (
+              <div style={{ marginTop: '5px', fontSize: '12px', color: '#dc3545' }}>
+                ⏳ 등고선 데이터 로딩 중...
+              </div>
+            )}
           </div>
         )}
 
@@ -450,33 +635,47 @@ const reverseGeocode = async (lat: string, lng: string): Promise<string> => {
             </Marker>
           )}
 
-          {/* 접근 가능한 모든 역들 마커 */}
-          {reachableStations.map((station, idx) => (
-            <Marker
-              key={`${station.station}-${idx}`}
-              position={[station.lat, station.lng]}
-              icon={getCustomIcon(getColorByTime(station.time))}
-            >
-              <Popup>
-                <strong>{station.station}</strong>
-                <br />
-                도달 시간: {station.time}분
-              </Popup>
-            </Marker>
-          ))}
+          {/* 등고선 컴포넌트 */}
+          {nearestStation && (
+            <ContourLines contourData={contourData} nearestStation={nearestStation} />
+          )}
+
+          {/* 등고선 범례 */}
+          {contourData && <ContourLegend contourData={contourData} />}
 
           <ClickableMap onSelect={handleMapClick} />
         </MapContainer>
 
         {/* 범례 */}
-        {reachableStations.length > 0 && (
+        {contourData && (
           <div style={{ padding: '10px', fontSize: '12px', color: '#666', backgroundColor: '#f9f9f9' }}>
             <strong>범례:</strong>
-            <span style={{ color: 'green', marginLeft: '10px' }}>● 15분 이하</span>
-            <span style={{ color: 'orange', marginLeft: '10px' }}>● 16-30분</span>
-            <span style={{ color: 'red', marginLeft: '10px' }}>● 30분 초과</span>
-            <span style={{ color: '#0066FF', marginLeft: '10px' }}>🚇 가장 가까운 역</span>
-            <span style={{ color: '#FF6B35', marginLeft: '10px' }}>P 선택한 위치</span>
+            <div style={{ marginTop: '5px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <div style={{ width: '12px', height: '12px', backgroundColor: '#00FF00', borderRadius: '50%' }}></div>
+                <span>● 10분 이하</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <div style={{ width: '12px', height: '12px', backgroundColor: '#32CD32', borderRadius: '50%' }}></div>
+                <span>● 11-20분</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <div style={{ width: '12px', height: '12px', backgroundColor: '#FFFF00', borderRadius: '50%' }}></div>
+                <span>● 21-30분</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <div style={{ width: '12px', height: '12px', backgroundColor: '#FFA500', borderRadius: '50%' }}></div>
+                <span>● 31-40분</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <div style={{ width: '12px', height: '12px', backgroundColor: '#FF4500', borderRadius: '50%' }}></div>
+                <span>● 41-50분</span>
+              </div>
+            </div>
+            <div style={{ marginTop: '5px', fontSize: '11px' }}>
+              🚇 가장 가까운 역<br/>
+              📍 선택한 위치
+            </div>
           </div>
         )}
       </div>
