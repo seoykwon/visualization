@@ -2,23 +2,31 @@
 import os
 import json
 import requests
+import pandas as pd
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from haversine import haversine
 from flask_cors import CORS
+import re # Added for normalize_station_name
 
 # Load API keys
 load_dotenv()
-ODSAY_KEY = os.getenv("ODSAY_API_KEY")
 KAKAO_API_KEY = os.getenv("KAKAO_API_KEY")
 
 app = Flask(__name__)
-# CORS(app)
 CORS(app, resources={r"/api/*": {"origins": "http://localhost:3000"}})
 
 # Load station coordinates from JSON
 with open("station_coords.json", encoding='utf-8') as f:
     STATIONS = json.load(f)
+
+# Load travel time data
+TRAVEL_TIMES_DF = None
+try:
+    TRAVEL_TIMES_DF = pd.read_csv("data/station_pairs_all_with_transfer.csv")
+    print(f"Travel time data loaded: {len(TRAVEL_TIMES_DF)} routes")
+except Exception as e:
+    print(f"Warning: Could not load travel times data: {e}")
 
 # 사용자 클릭 위치에서 가장 가까운 역 찾기
 def find_nearest_station(user_lat, user_lng):
@@ -111,80 +119,146 @@ def geocode():
     # 3) 모두 실패
     return jsonify({"error": "Address not found"}), 404
 
-# 출발역에서 모든 지하철역까지의 소요시간 계산
-def get_subway_times_from(start_lat, start_lng):
-    results = []
-    for station in STATIONS:
-        url = f"https://api.odsay.com/v1/api/searchPubTransPathT?"
-        params = {
-            "SX": start_lng,
-            "SY": start_lat,
-            "EX": station["lng"],
-            "EY": station["lat"],
-            "OPT": 0,
-            "apiKey": ODSAY_KEY
+# 등고선 데이터 생성 함수
+def generate_contour_data(start_station_name, time_intervals=[10, 20, 30, 40, 50]):
+    """
+    시작 역으로부터 각 시간 단위별로 도달 가능한 역들을 그룹화하여 등고선 데이터 생성
+    """
+    if TRAVEL_TIMES_DF is None:
+        return {"error": "Travel time data not available"}
+    
+    # 역명 매칭을 위한 정규화 함수
+    def normalize_station_name(name):
+        # "역" 접미사 제거
+        name = name.replace('역', '')
+        # 노선 정보 제거 (예: " 1호선", " 경의선" 등)
+        name = re.sub(r'\s*[0-9]호선', '', name)
+        name = re.sub(r'\s*경의선', '', name)
+        name = re.sub(r'\s*우이신설선', '', name)
+        name = re.sub(r'\s*의정부경전철', '', name)
+        name = re.sub(r'\s*에버라인', '', name)
+        return name.strip()
+    
+    # CSV에서 역명 찾기 (정규화된 이름으로 매칭)
+    normalized_start = normalize_station_name(start_station_name)
+    
+    # CSV의 src_station 컬럼에서 매칭되는 역 찾기
+    matching_stations = []
+    for _, row in TRAVEL_TIMES_DF.iterrows():
+        csv_station = row['src_station']
+        if normalize_station_name(csv_station) == normalized_start:
+            matching_stations.append(csv_station)
+    
+    if not matching_stations:
+        return {"error": f"No routes found from station: {start_station_name} (normalized: {normalized_start})"}
+    
+    # 첫 번째 매칭되는 역 사용
+    csv_station_name = matching_stations[0]
+    print(f"Station matched: '{start_station_name}' -> '{csv_station_name}'")
+    
+    start_routes = TRAVEL_TIMES_DF[TRAVEL_TIMES_DF['src_station'] == csv_station_name].copy()
+    if start_routes.empty:
+        return {"error": f"No routes found from CSV station: {csv_station_name}"}
+    
+    # 시작 역의 좌표 찾기
+    start_station_coord = None
+    for s in STATIONS:
+        if normalize_station_name(s['name']) == normalized_start:
+            start_station_coord = s
+            break
+    
+    if not start_station_coord:
+        return {"error": f"Start station coordinates not found: {start_station_name}"}
+    
+    contour_data = {}
+    for i, time_limit in enumerate(time_intervals):
+        # 해당 시간 내에 도달 가능한 역들
+        reachable_stations = start_routes[start_routes['minutes'] <= time_limit].copy()
+        
+        # 이전 시간대의 역들을 제외 (중복 제거)
+        if i > 0:
+            prev_time = time_intervals[i-1]
+            prev_stations = start_routes[start_routes['minutes'] <= prev_time]
+            reachable_stations = reachable_stations[~reachable_stations.index.isin(prev_stations.index)]
+        
+        stations_with_coords = []
+        
+        for _, route in reachable_stations.iterrows():
+            dst_station = route['dst_station']
+            
+            # 역 좌표 찾기 - 역명 매칭 개선
+            station_coord = None
+            
+            # 1) 정확한 매칭 시도
+            station_coord = next((s for s in STATIONS if s['name'] == dst_station), None)
+            
+            # 2) "역" 접미사 제거 후 매칭 시도
+            if not station_coord:
+                station_name_without_suffix = dst_station.replace('역', '')
+                station_coord = next((s for s in STATIONS if station_name_without_suffix in s['name']), None)
+            
+            # 3) 정규화된 이름으로 매칭 시도
+            if not station_coord:
+                normalized_dst = normalize_station_name(dst_station)
+                for s in STATIONS:
+                    if normalize_station_name(s['name']) == normalized_dst:
+                        station_coord = s
+                        break
+            
+            if station_coord:
+                stations_with_coords.append({
+                    'name': dst_station,
+                    'lat': float(station_coord['lat']),
+                    'lng': float(station_coord['lng']),
+                    'time': int(route['minutes'])
+                })
+        
+        # 시작 역 좌표 추가 (중앙점)
+        stations_with_coords.append({
+            'name': start_station_name,
+            'lat': float(start_station_coord['lat']),
+            'lng': float(start_station_coord['lng']),
+            'time': 0
+        })
+        
+        # 경계선을 위한 역들을 정렬 (중앙에서부터 거리순)
+        if len(stations_with_coords) > 1:
+            center_lat = float(start_station_coord['lat'])
+            center_lng = float(start_station_coord['lng'])
+            
+            # 거리 계산 함수
+            def calculate_distance(lat1, lng1, lat2, lng2):
+                return ((lat1 - lat2) ** 2 + (lng1 - lng2) ** 2) ** 0.5
+            
+            # 중앙에서부터 거리순으로 정렬
+            stations_with_coords.sort(key=lambda x: calculate_distance(
+                center_lat, center_lng, x['lat'], x['lng']
+            ))
+        
+        contour_data[f"{time_limit}분"] = {
+            'time_limit': time_limit,
+            'stations': stations_with_coords,
+            'count': len(stations_with_coords),
+            'center_lat': float(start_station_coord['lat']),
+            'center_lng': float(start_station_coord['lng'])
         }
-        res = requests.get(url, params=params)
-        if res.status_code != 200:
-            continue
-        try:
-            time = res.json()["result"]["path"][0]["info"]["totalTime"]
-            results.append({
-                "name": station["name"],
-                "lat": station["lat"],
-                "lng": station["lng"],
-                "time": time
-            })
-        except (KeyError, IndexError):
-            continue
-    return results
+    
+    return contour_data
 
-# 📍 API: 좌표 받아서 소요 시간 반환
-@app.route("/api/subway-times", methods=["POST"])
-def subway_times():
+# 등고선 데이터 API
+@app.route("/api/contour-data", methods=["POST"])
+def contour_data():
     data = request.get_json()
-    user_lat = data.get("lat")
-    user_lng = data.get("lng")
-    if not user_lat or not user_lng:
-        return jsonify({"error": "Missing coordinates"}), 400
-
-    results = get_subway_times_from(user_lat, user_lng)
-    return jsonify(results)
-
-@app.route('/api/accessible', methods=['POST'])
-def accessible():
-    data = request.json
-    user_lat = float(data['lat'])
-    user_lng = float(data['lng'])
-    user_coord = (user_lat, user_lng)
-
-    reachable_stations = []
-
-    for station in STATIONS:
-        try:
-            station_lat = float(station['lat'])
-            station_lng = float(station['lng'])
-
-            url = f"https://api.odsay.com/v1/api/searchPubTransPathT?SX={user_lng}&SY={user_lat}&EX={station_lng}&EY={station_lat}&OPT=0&apiKey={ODSAY_KEY}"
-            res = requests.get(url)
-            res_data = res.json()
-
-            # 지하철만 포함된 경로 찾기
-            for path in res_data['result']['path']:
-                if path['subPath'][0]['trafficType'] == 1:  # 1: subway
-                    total_time = path['info']['totalTime']
-                    reachable_stations.append({
-                        "station": station['name'],
-                        "lat": station_lat,
-                        "lng": station_lng,
-                        "time": total_time
-                    })
-                    break
-        except Exception as e:
-            print(f"Error for station {station['name']}: {e}")
-            continue
-
-    return jsonify(reachable_stations)
+    start_station_name = data.get("station_name")
+    
+    if not start_station_name:
+        return jsonify({"error": "Missing station name"}), 400
+    
+    try:
+        contour_data = generate_contour_data(start_station_name)
+        return jsonify(contour_data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # 역지오코딩 API 엔드포인트 추가
 @app.route("/api/reverse-geocode", methods=["POST"])
@@ -234,7 +308,6 @@ def reverse_geocode():
     except Exception as e:
         print(f"Reverse geocoding error: {e}")
         return jsonify({"error": "Failed to process reverse geocoding"}), 500
-
 
 if __name__ == "__main__":
     app.run(debug=True)
