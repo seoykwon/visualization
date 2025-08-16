@@ -120,7 +120,7 @@ def geocode():
     return jsonify({"error": "Address not found"}), 404
 
 # 등고선 데이터 생성 함수
-def generate_contour_data(start_station_name, time_intervals=[10, 20, 30, 40, 50]):
+def generate_contour_data(start_station_name, time_intervals=[5, 10, 15, 20, 25]):
     """
     시작 역으로부터 각 시간 단위별로 도달 가능한 역들을 그룹화하여 등고선 데이터 생성
     """
@@ -160,6 +160,10 @@ def generate_contour_data(start_station_name, time_intervals=[10, 20, 30, 40, 50
     if start_routes.empty:
         return {"error": f"No routes found from CSV station: {csv_station_name}"}
     
+    # 25분을 초과하는 역들은 완전히 제외
+    start_routes = start_routes[start_routes['minutes'] <= 25].copy()
+    print(f"Total routes within 25 minutes: {len(start_routes)}")
+    
     # 시작 역의 좌표 찾기
     start_station_coord = None
     for s in STATIONS:
@@ -179,6 +183,7 @@ def generate_contour_data(start_station_name, time_intervals=[10, 20, 30, 40, 50
         if i > 0:
             prev_time = time_intervals[i-1]
             prev_stations = start_routes[start_routes['minutes'] <= prev_time]
+            # 이전 시간대에 포함된 역들을 현재에서 제외
             reachable_stations = reachable_stations[~reachable_stations.index.isin(prev_stations.index)]
         
         stations_with_coords = []
@@ -234,6 +239,8 @@ def generate_contour_data(start_station_name, time_intervals=[10, 20, 30, 40, 50
             stations_with_coords.sort(key=lambda x: calculate_distance(
                 center_lat, center_lng, x['lat'], x['lng']
             ))
+        
+        print(f"{time_limit}분: {len(stations_with_coords)}개 역 포함 (중복 제거 후)")
         
         contour_data[f"{time_limit}분"] = {
             'time_limit': time_limit,

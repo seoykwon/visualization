@@ -100,12 +100,13 @@ function ContourLines({ contourData, nearestStation }: {
 }) {
   if (!contourData || !nearestStation) return null;
   
+  // 가까운 거리부터 순서대로 색상 정의 (예쁜 색상들)
   const timeColors: { [key: string]: string } = {
-    '10분': '#00FF00',    // 초록색
-    '20분': '#32CD32',    // 라임그린
-    '30분': '#FFFF00',    // 노란색
-    '40분': '#FFA500',    // 주황색
-    '50분': '#FF4500'     // 빨간색
+    '5분': '#FF69B4',     // 핑크 (가장 가까움)
+    '10분': '#87CEEB',    // 하늘색
+    '15분': '#FFA500',    // 오렌지
+    '20분': '#32CD32',    // 초록색
+    '25분': '#9370DB'     // 보라색 (가장 머)
   };
   
   console.log('ContourLines 렌더링:', contourData);
@@ -115,27 +116,36 @@ function ContourLines({ contourData, nearestStation }: {
     return null;
   }
   
-  const timeKeys = Object.keys(contourData);
+  // 시간 순서대로 정렬 (5분, 10분, 15분, 20분, 25분)
+  const timeKeys = Object.keys(contourData).sort((a, b) => {
+    const aTime = parseInt(a.replace('분', ''));
+    const bTime = parseInt(b.replace('분', ''));
+    return aTime - bTime;
+  });
+  
   console.log('ContourLines: 데이터 있음, 역 개수:', timeKeys.map(k => `${k}: ${contourData[k].count}개`));
   
   return (
     <>
-      {timeKeys.map((timeKey) => {
+      {/* 가장 먼 시간대부터 렌더링 (겹침 방지) */}
+      {timeKeys.slice().reverse().map((timeKey, index) => {
         const data = contourData[timeKey];
         const color = timeColors[timeKey] || '#000000';
         
-        // 시간대별로 투명도 조정 (겹치지 않도록)
-        const opacity = timeKey === '10분' ? 0.8 : 
-                      timeKey === '20분' ? 0.7 : 
-                      timeKey === '30분' ? 0.6 : 
-                      timeKey === '40분' ? 0.5 : 0.4;
+        // 시간대별로 투명도 조정 (가까운 시간대가 더 진하게)
+        const timeValue = parseInt(timeKey.replace('분', ''));
+        const fillOpacity = timeValue === 5 ? 0.4 : 
+                          timeValue === 10 ? 0.35 : 
+                          timeValue === 15 ? 0.3 : 
+                          timeValue === 20 ? 0.25 : 0.2;
+        const borderOpacity = 0.6; // 테두리는 일정하게
         
-        if (!data.stations || !Array.isArray(data.stations)) {
-          console.log(`ContourLines: ${timeKey} 데이터 문제`, data);
+        if (!data.stations || !Array.isArray(data.stations) || data.count === 0) {
+          console.log(`ContourLines: ${timeKey} 데이터 없음 또는 빈 배열`);
           return null;
         }
         
-        console.log(`ContourLines: ${timeKey} 렌더링 중, ${data.count}개 역`);
+        console.log(`ContourLines: ${timeKey} 렌더링 중, ${data.count}개 역, 투명도: ${fillOpacity}`);
         
         // 구불구불한 등고선을 그리기 위한 다각형 생성
         if (data.stations.length > 2) {
@@ -163,7 +173,25 @@ function ContourLines({ contourData, nearestStation }: {
           
           // 각도별로 정렬하여 경계선 생성
           angles.sort((a, b) => a.angle - b.angle);
-          const boundaryCoords = angles.map(item => [item.station.lat, item.station.lng]);
+          let boundaryCoords = angles.map(item => [item.station.lat, item.station.lng]);
+          
+          // 더 부드러운 곡선을 위해 중간점 추가
+          if (boundaryCoords.length > 2) {
+            const smoothedCoords = [];
+            for (let i = 0; i < boundaryCoords.length; i++) {
+              const current = boundaryCoords[i];
+              const next = boundaryCoords[(i + 1) % boundaryCoords.length];
+              
+              // 현재 점 추가
+              smoothedCoords.push(current);
+              
+              // 중간점 추가 (더 부드러운 곡선을 위해)
+              const midLat = (current[0] + next[0]) / 2;
+              const midLng = (current[1] + next[1]) / 2;
+              smoothedCoords.push([midLat, midLng]);
+            }
+            boundaryCoords = smoothedCoords;
+          }
           
           // 시작 역을 경계선에 추가
           boundaryCoords.unshift([centerLat, centerLng]);
@@ -176,8 +204,11 @@ function ContourLines({ contourData, nearestStation }: {
               pathOptions={{
                 color: color,
                 fillColor: color,
-                fillOpacity: opacity,
-                weight: 2
+                fillOpacity: fillOpacity,
+                weight: 2,
+                opacity: borderOpacity,
+                smoothFactor: 3, // 곡선을 부드럽게 만듦
+                smoothVertices: true // 꼭지점을 부드럽게 만듦
               }}
             />
           );
@@ -652,25 +683,28 @@ const reverseGeocode = async (lat: string, lng: string): Promise<string> => {
             <strong>범례:</strong>
             <div style={{ marginTop: '5px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                <div style={{ width: '12px', height: '12px', backgroundColor: '#00FF00', borderRadius: '50%' }}></div>
-                <span>● 10분 이하</span>
+                <div style={{ width: '12px', height: '12px', backgroundColor: '#FF69B4', borderRadius: '50%' }}></div>
+                <span>● 5분 이하 (가장 가까움)</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                <div style={{ width: '12px', height: '12px', backgroundColor: '#32CD32', borderRadius: '50%' }}></div>
-                <span>● 11-20분</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                <div style={{ width: '12px', height: '12px', backgroundColor: '#FFFF00', borderRadius: '50%' }}></div>
-                <span>● 21-30분</span>
+                <div style={{ width: '12px', height: '12px', backgroundColor: '#87CEEB', borderRadius: '50%' }}></div>
+                <span>● 6-10분</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                 <div style={{ width: '12px', height: '12px', backgroundColor: '#FFA500', borderRadius: '50%' }}></div>
-                <span>● 31-40분</span>
+                <span>● 11-15분</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                <div style={{ width: '12px', height: '12px', backgroundColor: '#FF4500', borderRadius: '50%' }}></div>
-                <span>● 41-50분</span>
+                <div style={{ width: '12px', height: '12px', backgroundColor: '#32CD32', borderRadius: '50%' }}></div>
+                <span>● 16-20분</span>
               </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <div style={{ width: '12px', height: '12px', backgroundColor: '#9370DB', borderRadius: '50%' }}></div>
+                <span>● 21-25분 (가장 머)</span>
+              </div>
+            </div>
+            <div style={{ marginTop: '5px', fontSize: '11px', color: '#888' }}>
+              💡 모든 등고선은 투명하게 표시되어 지도를 볼 수 있습니다
             </div>
             <div style={{ marginTop: '5px', fontSize: '11px' }}>
               🚇 가장 가까운 역<br/>
