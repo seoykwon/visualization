@@ -47,3 +47,6 @@
       - **Commit** -> stage changes & commit
       - **Push** -> send branch to remote
       - **Create pull / Merge request** -> right-click branch -> "create pull request"  
+
+## **OBJECTIVE**  
+
