@@ -14,7 +14,8 @@ load_dotenv()
 KAKAO_API_KEY = os.getenv("KAKAO_API_KEY")
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "http://localhost:3000"}})
+# CORS(app, resources={r"/api/*": {"origins": "http://localhost:3000"}})
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 # Load station coordinates from JSON
 with open("station_coords.json", encoding='utf-8') as f:
