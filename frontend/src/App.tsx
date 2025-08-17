@@ -18,8 +18,32 @@ import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 
 // 파일 맨 위 근처
-const API_BASE = import.meta.env.VITE_API_BASE || ""; // Vercel/로컬에서 주입
-const api = axios.create({ baseURL: API_BASE });      // baseURL만 바꾸면 전체가 따라감
+// const API_BASE = import.meta.env.VITE_API_BASE || ""; // Vercel/로컬에서 주입
+// const api = axios.create({ baseURL: API_BASE });      // baseURL만 바꾸면 전체가 따라감
+
+// 환경변수 안전 읽기 (Vite/CRA/런타임 주입 모두 지원)
+function readApiBase(): string {
+  // 1) Vite
+  try {
+    const viteBase = (import.meta as any)?.env?.VITE_API_BASE;
+    if (typeof viteBase === 'string' && viteBase) return viteBase;
+  } catch {}
+
+  // 2) Create React App
+  try {
+    const craBase = (process.env as any)?.REACT_APP_API_BASE;
+    if (typeof craBase === 'string' && craBase) return craBase;
+  } catch {}
+
+  // 3) (옵션) window 런타임 주입
+  const winBase = (window as any)?.__API_BASE__;
+  if (typeof winBase === 'string' && winBase) return winBase;
+
+  return '';
+}
+
+const API_BASE = readApiBase();
+const api = axios.create({ baseURL: API_BASE });
 
 // ─────────────────────────────────────────────────────
 // 0) Leaflet 기본 마커 이미지 설정
