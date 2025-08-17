@@ -189,3 +189,4 @@ zope.interface==7.2
 gunicorn>=21.2
 flask>=2.3
 flask-cors>=3.0
+haversine>=2.8.0
