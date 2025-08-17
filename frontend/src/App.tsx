@@ -120,8 +120,9 @@ function collectAllStations(contourData: ContourData | null): Station[] {
     (t.stations || []).forEach((s) => {
       const lat = Number(s.lat);
       const lng = Number(s.lng);
-      if (Number.isFinite(lat) && Number.isFinite(lng)) {
-        out.push({ ...s, lat, lng });
+      const time = Number(s.time); // 시간도 숫자로 변환
+      if (Number.isFinite(lat) && Number.isFinite(lng) && Number.isFinite(time)) {
+        out.push({ ...s, lat, lng, time });
       }
     });
   });
@@ -147,6 +148,64 @@ function getNearestStationDetail(
 }
 
 // ─────────────────────────────────────────────────────
+// 유틸: 스테이션 목록/타임맵/최근접 계산(2원점 합계용)
+// ─────────────────────────────────────────────────────
+function collectStationsOnlyGeometry(contourData: ContourData | null): Station[] {
+  if (!contourData) return [];
+  const seen = new Set<string>();
+  const out: Station[] = [];
+  Object.values(contourData).forEach((t) => {
+    (t.stations || []).forEach((s) => {
+      if (!seen.has(s.name)) {
+        const lat = Number(s.lat);
+        const lng = Number(s.lng);
+        const time = Number(s.time); // 시간도 숫자로 변환
+        if (Number.isFinite(lat) && Number.isFinite(lng) && Number.isFinite(time)) {
+          out.push({ ...s, lat, lng, time });
+          seen.add(s.name);
+        }
+      }
+    });
+  });
+  return out;
+}
+
+function buildTimeMapByName(contourData: ContourData | null): Map<string, number> {
+  const m = new Map<string, number>();
+  if (!contourData) return m;
+  
+  // 모든 시간대의 스테이션을 순회하면서 시간 정보 수집
+  Object.values(contourData).forEach((timeData) => {
+    (timeData.stations || []).forEach((station) => {
+      const time = Number(station.time);
+      if (Number.isFinite(time)) {
+        // 같은 역이 여러 시간대에 있을 수 있으므로, 더 작은 시간을 우선 선택
+        const existingTime = m.get(station.name);
+        if (existingTime === undefined || time < existingTime) {
+          m.set(station.name, time);
+        }
+      }
+    });
+  });
+  
+  console.log(`Built time map with ${m.size} stations:`, Array.from(m.entries()).slice(0, 5));
+  return m;
+}
+
+function getNearestByGeometry(
+  lat: number, lng: number, stations: Station[]
+): { station: Station; distanceKm: number } | null {
+  if (!stations.length) return null;
+  let best = stations[0];
+  let bestD = haversine(lat, lng, best.lat, best.lng);
+  for (let i = 1; i < stations.length; i++) {
+    const d = haversine(lat, lng, stations[i].lat, stations[i].lng);
+    if (d < bestD) { best = stations[i]; bestD = d; }
+  }
+  return { station: best, distanceKm: bestD };
+}
+
+// ─────────────────────────────────────────────────────
 /** 4) 최근접 그리드 생성 (격자 해상도 gridSizeDeg로 조절) */
 // ─────────────────────────────────────────────────────
 function createNearestNeighborGrid(
@@ -159,8 +218,9 @@ function createNearestNeighborGrid(
     timeData.stations?.forEach((s) => {
       const lat = Number(s.lat);
       const lng = Number(s.lng);
-      if (Number.isFinite(lat) && Number.isFinite(lng)) {
-        allStations.push({ ...s, lat, lng });
+      const time = Number(s.time);
+      if (Number.isFinite(lat) && Number.isFinite(lng) && Number.isFinite(time)) {
+        allStations.push({ ...s, lat, lng, time });
       }
     });
   });
@@ -193,6 +253,21 @@ function createNearestNeighborGrid(
 // ─────────────────────────────────────────────────────
 /** 5) 맵 보조 컴포넌트 */
 // ─────────────────────────────────────────────────────
+
+function FitBoundsToOrigins({ coords1, coords2 }: { coords1: Coords | null; coords2: Coords | null }) {
+  const map = useMap();
+  useEffect(() => {
+    if (coords1 && coords2) {
+      const b = L.latLngBounds(
+        [parseFloat(coords1.lat), parseFloat(coords1.lng)],
+        [parseFloat(coords2.lat), parseFloat(coords2.lng)]
+      );
+      map.fitBounds(b, { padding: [50, 50] });
+    }
+  }, [coords1, coords2, map]);
+  return null;
+}
+
 function MapCenterUpdater({ coords }: { coords: Coords | null }) {
   const map = useMap();
   useEffect(() => {
@@ -248,9 +323,34 @@ function getNearestStationIcon() {
 }
 
 // ─────────────────────────────────────────────────────
+// 아이콘(라벨/색상 파라미터화, btoa 대신 utf8 data URL)
+// ─────────────────────────────────────────────────────
+function makeMarkerIcon(label: string, fill: string) {
+  const svg = `
+    <svg width="30" height="46" viewBox="0 0 30 46" xmlns="http://www.w3.org/2000/svg">
+      <path d="M15 0C6.7 0 0 6.7 0 15c0 15 15 31 15 31s15-16 15-31C30 6.7 23.3 0 15 0z" fill="${fill}"/>
+      <circle cx="15" cy="15" r="8" fill="white"/>
+      <text x="15" y="20" text-anchor="middle" fill="${fill}" font-size="12" font-weight="bold">${label}</text>
+    </svg>
+  `;
+  const iconUrl = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+  return new L.Icon({
+    iconUrl,
+    iconSize: [30, 46],
+    iconAnchor: [15, 46],
+    popupAnchor: [1, -38],
+  });
+}
+
+const getSelectedLocationIcon1 = () => makeMarkerIcon('A', '#FF6B35'); // 주소1
+const getSelectedLocationIcon2 = () => makeMarkerIcon('B', '#9C27B0'); // 주소2
+const getNearestStationIcon1 = () => makeMarkerIcon('N1', '#0066FF');  // 역1
+const getNearestStationIcon2 = () => makeMarkerIcon('N2', '#00B8D9');  // 역2
+
+// ─────────────────────────────────────────────────────
 /** 7) 범례 (legendItems만 사용 → 지도와 100% 일치) */
 // ─────────────────────────────────────────────────────
-function Legend() {
+function Legend({ isSumMode = false }: { isSumMode?: boolean }) {
   return (
     <div style={{
       position: 'absolute',
@@ -261,9 +361,11 @@ function Legend() {
       borderRadius: '5px',
       boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
       zIndex: 1000,
-      minWidth: '160px'
+      minWidth: '200px'
     }}>
-      <h4 style={{ margin: '0 0 10px 0', fontSize: '14px' }}>도달 시간(분)</h4>
+      <h4 style={{ margin: '0 0 10px 0', fontSize: '14px' }}>
+        {isSumMode ? '합계 도달 시간(분)' : '도달 시간(분)'}
+      </h4>
       {legendItems.map((item) => (
         <div key={item.label} style={{ display: 'flex', alignItems: 'center', marginBottom: '6px', fontSize: '12px' }}>
           <div style={{
@@ -274,7 +376,9 @@ function Legend() {
         </div>
       ))}
       <div style={{ fontSize: '11px', color: '#888', marginTop: '6px' }}>
-        각 셀은 해당 위치에서 <b>가장 가까운 역</b>의 소요시간을 나타냅니다.
+        {isSumMode
+          ? <>각 셀은 최근접역 <b>s</b>에 대해 <b>주소1→s 시간 + 주소2→s 시간</b>의 합을 표시합니다.</>
+          : <>각 셀은 해당 위치에서 <b>가장 가까운 역</b>의 소요시간을 나타냅니다.</>}
       </div>
     </div>
   );
@@ -312,6 +416,86 @@ function UnifiedColorContours({
 }
 
 // ─────────────────────────────────────────────────────
+// 2원점 합계시간 컬러 레이어
+// 해당 위치의 최근접역 s를 잡고, t_sum = t1(s) + t2(s)
+// ─────────────────────────────────────────────────────
+function UnifiedColorContoursSum({
+  contour1, contour2,
+}: {
+  contour1: ContourData | null;
+  contour2: ContourData | null;
+}) {
+  // 훅은 무조건 최상단에서
+  const regions = React.useMemo(() => {
+    if (!contour1 || !contour2) return [];
+
+    const geom1 = collectStationsOnlyGeometry(contour1);
+    const geom2 = collectStationsOnlyGeometry(contour2);
+    const geoIndexByName = new Map<string, Station>();
+    [...geom1, ...geom2].forEach((s) => { if (!geoIndexByName.has(s.name)) geoIndexByName.set(s.name, s); });
+    const geometry = Array.from(geoIndexByName.values());
+
+    const tmap1 = buildTimeMapByName(contour1);
+    const tmap2 = buildTimeMapByName(contour2);
+
+    console.log('Address1 time map size:', tmap1.size);
+    console.log('Address2 time map size:', tmap2.size);
+    console.log('Sample from tmap2:', Array.from(tmap2.entries()).slice(0, 3));
+
+    const gridSizeDeg = 0.003;
+    const area = { north: 37.70, south: 37.43, east: 127.27, west: 126.70 };
+
+    const cells: { bounds: [number, number][], color: string, sum: number }[] = [];
+    for (let lat = area.south; lat < area.north; lat += gridSizeDeg) {
+      for (let lng = area.west; lng < area.east; lng += gridSizeDeg) {
+        const cLat = lat + gridSizeDeg / 2;
+        const cLng = lng + gridSizeDeg / 2;
+
+        const nearest = getNearestByGeometry(cLat, cLng, geometry);
+        if (!nearest) continue;
+        const name = nearest.station.name;
+
+        // 시간 맵에서 역 이름으로 조회 (없으면 보수적으로 60분)
+        const t1 = tmap1.get(name) ?? 60;
+        const t2 = tmap2.get(name) ?? 60;
+        const sum = Math.round(t1 + t2);
+
+        const color = getTimeColor(sum); // ★ 기존 팔레트 재사용(원하면 threshold 조정 가능)
+
+        const poly: [number, number][] = [
+          [lat, lng],
+          [lat + gridSizeDeg, lng],
+          [lat + gridSizeDeg, lng + gridSizeDeg],
+          [lat, lng + gridSizeDeg],
+        ];
+        cells.push({ bounds: poly, color, sum });
+      }
+    }
+    return cells;
+  }, [contour1, contour2]);
+
+  if (!regions.length) return null;
+
+  return (
+    <>
+      {regions.map((region, i) => (
+        <Polygon
+          key={`sum-region-${i}`}
+          positions={region.bounds}
+          pathOptions={{
+            color: 'transparent',
+            fillColor: region.color,
+            fillOpacity: 0.5,
+            weight: 0,
+            smoothFactor: 1.0,
+          }}
+        />
+      ))}
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────
 /** 9) Kakao 지도 길찾기(웹) 열기 */
 // ─────────────────────────────────────────────────────
 function openKakaoTransitRoute(
@@ -325,7 +509,6 @@ function openKakaoTransitRoute(
   const url = `https://map.kakao.com/?sName=${s.name}&sx=${s.lng}&sy=${s.lat}&eName=${e.name}&ex=${e.lng}&ey=${e.lat}&by=SUBWAY`;
   window.open(url, "_blank");
 }
-
 
 // ─────────────────────────────────────────────────────
 /** 10) 커서 따라다니는 툴팁(hover 즉시) & 핀 고정 툴팁 */
@@ -386,13 +569,89 @@ function CursorFollowerTooltip({
   );
 }
 
+// ─────────────────────────────────────────────────────
+// 커서 툴팁(합계 시간)
+// ─────────────────────────────────────────────────────
+function CursorFollowerTooltipSum({
+  contour1,
+  contour2,
+  origin1Name,
+  origin2Name,
+  disabled,
+}: {
+  contour1: ContourData | null;
+  contour2: ContourData | null;
+  origin1Name?: string;
+  origin2Name?: string;
+  disabled?: boolean;
+}) {
+  const map = useMap();
+
+  // 훅은 최상단
+  const geometry = React.useMemo(() => {
+    const geom1 = collectStationsOnlyGeometry(contour1);
+    const geom2 = collectStationsOnlyGeometry(contour2);
+    const byName = new Map<string, Station>();
+    [...geom1, ...geom2].forEach((s) => { if (!byName.has(s.name)) byName.set(s.name, s); });
+    return Array.from(byName.values());
+  }, [contour1, contour2]);
+
+  const tmap1 = React.useMemo(() => buildTimeMapByName(contour1), [contour1]);
+  const tmap2 = React.useMemo(() => buildTimeMapByName(contour2), [contour2]);
+
+  const [pos, setPos] = React.useState<{ lat: number; lng: number } | null>(null);
+  const [info, setInfo] = React.useState<{ nearName: string; t1: number; t2: number; sum: number; distanceKm: number } | null>(null);
+
+  React.useEffect(() => {
+    if (!map || disabled) return;
+    const onMove = (e: any) => {
+      const { lat, lng } = e.latlng || {};
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      setPos({ lat, lng });
+
+      const nearest = getNearestByGeometry(lat, lng, geometry);
+      if (!nearest) { setInfo(null); return; }
+      const name = nearest.station.name;
+      const t1 = tmap1.get(name) ?? 60;
+      const t2 = tmap2.get(name) ?? 60;
+      setInfo({ nearName: name, t1, t2, sum: Math.round(t1 + t2), distanceKm: nearest.distanceKm });
+    };
+    const onOut = () => { setPos(null); setInfo(null); };
+
+    map.on('mousemove', onMove);
+    map.on('mouseout', onOut);
+    return () => {
+      map.off('mousemove', onMove);
+      map.off('mouseout', onOut);
+    };
+  }, [map, geometry, tmap1, tmap2, disabled]);
+
+  if (disabled || !pos || !info) return null;
+    return (
+    <Marker position={[pos.lat, pos.lng]} opacity={0} interactive={false} keyboard={false}>
+      <Tooltip permanent direction="top" offset={[0, -10]} interactive>
+        <div style={{ fontSize: 12, lineHeight: 1.4 }}>
+          <div><b>커서 최근접역</b>: {info.nearName}</div>
+          <div>{origin1Name ?? '주소1'} → {info.nearName}: {Math.round(info.t1)}분</div>
+          <div>{origin2Name ?? '주소2'} → {info.nearName}: {Math.round(info.t2)}분</div>
+          <div><b>합계</b>: {info.sum}분</div>
+          <div style={{ color: '#666' }}>(커서↔역: {info.distanceKm.toFixed(2)} km)</div>
+        </div>
+      </Tooltip>
+    </Marker>
+  );
+}
+
+// ─────────────────────────────────────────────────────
+/** 11) 핀 고정 툴팁 & 유틸 */
+// ─────────────────────────────────────────────────────
 function PinnedTooltip({
   pinned,
   originCoords,
   originStationName,
   onClose,
 }: {
-  pinned: PinnedTip;
+  pinned: PinnedTip | null;
   originCoords?: { lat: string; lng: string } | null;
   originStationName?: string;
   onClose: () => void;
@@ -402,12 +661,12 @@ function PinnedTooltip({
   return (
     <Marker position={[pos.lat, pos.lng]} opacity={0} interactive={false} keyboard={false}>
       <Tooltip permanent direction="top" offset={[0, -10]} interactive bubblingMouseEvents={false}>
-        <div style={{ fontSize: 12, lineHeight: 1.5, maxWidth: 240 }}>
+        <div style={{ fontSize: 12, lineHeight: 1.5, maxWidth: 260 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
             <b>관심 지점</b>
             <button
               type="button"
-              onClick={(e) => {                 // 👈 전파/기본동작 차단
+              onClick={(e) => {
                 e.stopPropagation();
                 e.preventDefault();
                 onClose();
@@ -425,7 +684,7 @@ function PinnedTooltip({
             {originStationName ? (
               <div><b>{originStationName}</b> ↔ <b>{pinned.nearName}</b> : {pinned.timeMin}분</div>
             ) : (
-              <div>소요시간: {pinned.timeMin}분</div>
+              <div>소요시간(합계): {pinned.timeMin}분</div>
             )}
             <div style={{ color: '#666' }}>(지점↔역: {pinned.distanceKm.toFixed(2)} km)</div>
           </div>
@@ -434,7 +693,7 @@ function PinnedTooltip({
             <button
               type="button"
               onClick={(e) => {
-                e.stopPropagation();            // 👈 전파 차단
+                e.stopPropagation();
                 e.preventDefault();
                 openNaverRoomsAt(pos.lat, pos.lng);
               }}
@@ -449,7 +708,7 @@ function PinnedTooltip({
             <button
               type="button"
               onClick={(e) => {
-                e.stopPropagation();            // 👈 전파 차단
+                e.stopPropagation();
                 e.preventDefault();
                 const startLat = originCoords ? parseFloat(originCoords.lat) : pos.lat;
                 const startLng = originCoords ? parseFloat(originCoords.lng) : pos.lng;
@@ -474,124 +733,176 @@ function PinnedTooltip({
   );
 }
 
-// ─────────────────────────────────────────────────────
-/** 11) 앱 유틸 */
-// ─────────────────────────────────────────────────────
 function openNaverRoomsAt(lat: number, lng: number): void {
   const zoom = 15;
   const url = `https://new.land.naver.com/rooms?ms=${lat},${lng},${zoom}&a=APT:OPST:ABYG:OBYG:GM:OR:DDDGG:JWJT:SGJT:HOJT:VL&e=RETAIL&aa=SMALLSPCRENT`;
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
+// contour API가 역 표기 때문에 실패할 수 있어 후보 이름을 생성
+function normalizeStationNameCandidates(baseName: string): string[] {
+  const s = String(baseName || '').trim();
+  if (!s) return [];
+  const noSpaces = s.replace(/\s+/g, '');
+  const withoutStationWord = s.replace(/역$/u, '').trim();
+  const withStationSuffix = /역$/u.test(s) ? s : `${s}역`;
+
+  const tokens = s.split(/\s+/);
+  const withParen: string[] = [];
+  if (tokens.length >= 2) {
+    const last = tokens[tokens.length - 1];
+    const head = tokens.slice(0, -1).join('').replace(/역$/u, '');
+    withParen.push(`${head}(${last})`, `${head} (${last})`, `${head}역(${last})`, `${head} 역(${last})`);
+  }
+
+  return Array.from(new Set([
+    s, noSpaces, withoutStationWord, withStationSuffix, `${withoutStationWord}역`,
+    ...withParen, ...withParen.map(x => x.replace(/\s+/g, '')),
+  ])).filter(Boolean);
+}
+
+function isValidContourData(d: any): d is ContourData {
+  if (!d || typeof d !== 'object' || 'error' in d) return false;
+  const keys = Object.keys(d);
+  if (!keys.length) return false;
+  return keys.some(k => Array.isArray((d as any)[k]?.stations));
+}
+
 // ─────────────────────────────────────────────────────
 /** 12) 메인 앱 */
 // ─────────────────────────────────────────────────────
 function App() {
-  const [address, setAddress] = useState('');
-  const [coords, setCoords] = useState<Coords | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [nearestStation, setNearestStation] = useState<any>(null);
+  const [address1, setAddress1] = useState('');
+  const [address2, setAddress2] = useState('');
+  const [coords1, setCoords1] = useState<Coords | null>(null);
+  const [coords2, setCoords2] = useState<Coords | null>(null);
+  const [nearest1, setNearest1] = useState<any>(null);
+  const [nearest2, setNearest2] = useState<any>(null);
+  const [contour1, setContour1] = useState<ContourData | null>(null);
+  const [contour2, setContour2] = useState<ContourData | null>(null);
+
   const [loading, setLoading] = useState(false);
-  const [contourData, setContourData] = useState<ContourData | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [pinned, setPinned] = useState<PinnedTip | null>(null);
   const [mapKey, setMapKey] = useState(0);
 
-  const handleReset = () => {
-  setAddress('');
-  setCoords(null);
-  setErrorMessage(null);
-  setNearestStation(null);
-  setContourData(null);
-  setLoading(false);
-  setHasOrigin(false);
-  setPinned(null);
-  // 지도도 초기 중심/줌으로 돌아가도록 전체 리마운트
-  setMapKey((k) => k + 1);
-};
-
-  // 기준(설정) 위치를 한 번이라도 정했는지
-  const [hasOrigin, setHasOrigin] = useState(false);
-  // 클릭으로 고정한 툴팁
-  const [pinned, setPinned] = useState<PinnedTip | null>(null);
-
-  const reverseGeocode = async (lat: string, lng: string): Promise<string> => {
-    try {
-      const response = await axios.post('http://localhost:5000/api/reverse-geocode', {
-        lat: parseFloat(lat), lng: parseFloat(lng),
-      });
-      const addr = response?.data?.address;
-      if (addr && typeof addr === 'string' && addr.trim() && !addr.includes('위도') && !addr.includes('경도')) {
-        setAddress(addr);
-        setErrorMessage(null);
-        return addr;
-      }
-      throw new Error('유효한 주소를 찾을 수 없습니다');
-    } catch {
-      const fallbackAddress = `위도: ${parseFloat(lat).toFixed(6)}, 경도: ${parseFloat(lng).toFixed(6)}`;
-      setAddress(fallbackAddress);
-      return fallbackAddress;
-    }
+  const geocodeAddress = async (address: string) => {
+    const res = await axios.post('http://localhost:5000/api/geocode', { address });
+    return { lat: String(res.data.lat), lng: String(res.data.lng) } as Coords;
   };
 
-  const findNearestStation = async (lat: number, lng: number) => {
-    try {
-      const response = await axios.post('http://localhost:5000/api/nearest-station', { lat, lng });
-      setNearestStation(response.data);
-      if (response.data?.name) {
-        try {
-          const contourResponse = await axios.post('http://localhost:5000/api/contour-data', {
-            station_name: response.data.name
-          });
-          setContourData(contourResponse.data);
-        } catch {
-          setContourData(null);
-        }
-      }
-    } catch {
-      setNearestStation(null);
-      setContourData(null);
+  const fetchNearestAndContour = async (lat: number, lng: number) => {
+    const nRes = await axios.post('http://localhost:5000/api/nearest-station', { lat, lng });
+    const nearest = nRes.data;
+    const baseName = String(nearest?.name ?? '').trim();
+
+    let contour: ContourData | null = null;
+    for (const cand of normalizeStationNameCandidates(baseName)) {
+      try {
+        const cr = await axios.post('http://localhost:5000/api/contour-data', { station_name: cand });
+        if (isValidContourData(cr?.data)) { contour = cr.data; break; }
+      } catch {/* 다른 후보 시도 */}
     }
+    return { nearest, contour };
   };
 
   const handleSearch = async () => {
-    if (!address.trim()) return;
+    const a1 = address1.trim();
+    const a2 = address2.trim();
+    if (!a1 && !a2) return;
+
     setLoading(true);
+    setErrorMessage(null);
+    setPinned(null);
+
     try {
-      const response = await axios.post('http://localhost:5000/api/geocode', { address });
-      const newCoords = { lat: response.data.lat, lng: response.data.lng };
-      setCoords(newCoords);
-      setHasOrigin(true); // ★ 기준 위치 확정
-      setPinned(null);    // ★ 기존 핀 제거
-      setErrorMessage(null);
-      await findNearestStation(parseFloat(response.data.lat), parseFloat(response.data.lng));
+      if (a1 && a2) {
+        // 다중 모드
+        const [c1, c2] = await Promise.all([geocodeAddress(a1), geocodeAddress(a2)]);
+        setCoords1(c1); setCoords2(c2);
+
+        const [r1, r2] = await Promise.allSettled([
+          fetchNearestAndContour(parseFloat(c1.lat), parseFloat(c1.lng)),
+          fetchNearestAndContour(parseFloat(c2.lat), parseFloat(c2.lng)),
+        ]);
+
+        if (r1.status === 'fulfilled') {
+          setNearest1(r1.value.nearest);
+          setContour1(r1.value.contour ?? null);
+        } else {
+          setNearest1(null); setContour1(null);
+        }
+
+        if (r2.status === 'fulfilled') {
+          setNearest2(r2.value.nearest);
+          setContour2(r2.value.contour ?? null);
+        } else {
+          setNearest2(null); setContour2(null);
+        }
+      } else {
+        // 단일 모드 (어느 입력이든 하나만 있으면 됨)
+        const only = a1 || a2;
+        const c = await geocodeAddress(only);
+        const { nearest, contour } = await fetchNearestAndContour(parseFloat(c.lat), parseFloat(c.lng));
+
+        // 단일 모드에선 1번 슬롯을 사용
+        setCoords1(c); setCoords2(null);
+        setNearest1(nearest); setNearest2(null);
+        setContour1(contour ?? null); setContour2(null);
+      }
     } catch {
-      setCoords(null);
-      setNearestStation(null);
-      setErrorMessage('주소 또는 장소를 찾을 수 없습니다.');
+      setErrorMessage('검색 중 오류가 발생했습니다.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') handleSearch();
+  const handleReset = () => {
+    setAddress1(''); setAddress2('');
+    setCoords1(null); setCoords2(null);
+    setNearest1(null); setNearest2(null);
+    setContour1(null); setContour2(null);
+    setPinned(null);
+    setErrorMessage(null);
+    setMapKey(k => k + 1); // 맵 리마운트로 센터 초기화
   };
 
-  // ★ 클릭 분기: 첫 클릭은 기준 위치 설정, 이후 클릭은 핀 고정(툴팁 고정)
-  const handleMapClick = async (lat: number, lng: number) => {
-    if (!hasOrigin) {
-      const newCoords = { lat: lat.toString(), lng: lng.toString() };
-      setCoords(newCoords);
-      setHasOrigin(true);
-      setPinned(null);
-      try { await reverseGeocode(String(lat), String(lng)); } catch {}
-      await findNearestStation(lat, lng);
+  // 클릭 시 핀 고정(단일/합계 분기)
+  const handleMapClick = (lat: number, lng: number) => {
+    const isSumMode = Boolean(nearest1 && nearest2 && contour1 && contour2);
+
+    if (isSumMode) {
+      const byName = new Map<string, Station>();
+      [...collectStationsOnlyGeometry(contour1), ...collectStationsOnlyGeometry(contour2)]
+        .forEach((s) => { if (!byName.has(s.name)) byName.set(s.name, s); });
+      const geometry = Array.from(byName.values());
+      const nearest = getNearestByGeometry(lat, lng, geometry);
+      if (!nearest) return;
+
+      const tmap1 = buildTimeMapByName(contour1);
+      const tmap2 = buildTimeMapByName(contour2);
+      const name = nearest.station.name;
+      const t1 = tmap1.get(name) ?? 60;
+      const t2 = tmap2.get(name) ?? 60;
+      const sum = Math.round(t1 + t2);
+
+      setPinned({
+        pos: { lat, lng },
+        nearName: name,
+        nearLatLng: { lat: nearest.station.lat, lng: nearest.station.lng },
+        timeMin: sum,
+        distanceKm: nearest.distanceKm,
+      });
       return;
     }
 
-    // 이후 클릭: 핀 고정
-    const stations = collectAllStations(contourData);
+    // 단일 모드
+    const singleContour = contour1 ?? contour2;
+    if (!singleContour) return;
+    const stations = collectAllStations(singleContour);
     const detail = getNearestStationDetail(lat, lng, stations);
     if (!detail) return;
+
     setPinned({
       pos: { lat, lng },
       nearName: detail.station.name,
@@ -601,6 +912,12 @@ function App() {
     });
   };
 
+  // 렌더 분기용 플래그/프록시
+  const isSumMode = Boolean(nearest1 && nearest2 && contour1 && contour2);
+  const singleCoords = coords1 ?? coords2;
+  const singleNearest = nearest1 ?? nearest2;
+  const singleContour = contour1 ?? contour2;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
       {/* 헤더 */}
@@ -609,96 +926,36 @@ function App() {
           <h1 style={{ margin: 0 }}>서울 지하철 역간 접근성 지도</h1>
         </div>
 
-        {/* 검색/버튼 줄 */}
+        {/* 검색 UI */}
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
           <input
             type="text"
-            value={address}
-            onChange={(e) => setAddress(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="📍 주소 입력 또는 지도 클릭"
-            style={{ width: '300px', padding: '8px', fontSize: '14px' }}
+            value={address1}
+            onChange={(e) => setAddress1(e.target.value)}
+            placeholder="📍 주소 1 입력(필수 또는 단일 검색)"
+            style={{ width: '280px', padding: '8px', fontSize: '14px' }}
+          />
+          <input
+            type="text"
+            value={address2}
+            onChange={(e) => setAddress2(e.target.value)}
+            placeholder="📍 주소 2 입력(선택)"
+            style={{ width: '280px', padding: '8px', fontSize: '14px' }}
           />
           <button
             onClick={handleSearch}
-            disabled={loading}
-            style={{
-              padding: '8px 16px',
-              fontSize: '14px',
-              backgroundColor: loading ? '#ccc' : '#007bff',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: loading ? 'not-allowed' : 'pointer',
-            }}
+            disabled={loading || (!address1.trim() && !address2.trim())}
+            style={{ padding: '8px 12px', fontSize: '14px', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: '4px', cursor: loading ? 'not-allowed' : 'pointer' }}
           >
-            {loading ? '검색 중...' : '위치 검색'}
+            {loading ? '검색 중…' : '검색하기'}
           </button>
-
           <button
-              onClick={handleReset}
-              style={{ padding: '8px 16px', fontSize: '14px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-            >
-              초기화
-            </button>
-
-          <button
-            onClick={() => {
-              if (!coords) return;
-              const lat = parseFloat(coords.lat);
-              const lng = parseFloat(coords.lng);
-              openNaverRoomsAt(lat, lng);
-            }}
-            disabled={!coords}
-            style={{
-              padding: '8px 16px',
-              fontSize: '14px',
-              backgroundColor: coords ? '#00C73C' : '#ccc',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: coords ? 'pointer' : 'not-allowed',
-            }}
+            onClick={handleReset}
+            style={{ padding: '8px 12px', fontSize: '14px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
           >
-            🏠 매물 보기
+            초기화
           </button>
         </div>
-
-        {/* 선택된 위치 */}
-        {coords && (
-          <div style={{ padding: '10px', backgroundColor: '#fff3cd', borderRadius: '5px', fontSize: '14px', border: '1px solid #ffeaa7' }}>
-            <strong>📍 선택된 위치:</strong>{' '}
-            {address && !address.includes('위도') && !address.includes('경도')
-              ? address
-              : `위도: ${parseFloat(coords.lat).toFixed(4)}, 경도: ${parseFloat(coords.lng).toFixed(4)}`}
-            {address && address.includes('위도') && (
-              <div style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>
-                💡 정확한 주소를 가져오는 중입니다...
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* 가장 가까운 역 정보 */}
-        {nearestStation && (
-          <div style={{ padding: '10px', backgroundColor: '#e8f4f8', borderRadius: '5px', fontSize: '14px' }}>
-            <strong>🚇 가장 가까운 지하철역:</strong> {nearestStation.name}
-            <span style={{ color: '#666' }}>
-              {' '}(거리:{' '}
-              {((nearestStation as any).distance_km ?? (nearestStation as any).distance) ?? '—'} km)
-            </span>
-            {contourData && (
-              <div style={{ marginTop: '5px', fontSize: '12px', color: '#28a745' }}>
-                ✅ 등고선 데이터 로드 완료: {Object.entries(contourData).map(([k, v]) => `${k}(${(v as any).count}개)`).join(', ')}
-              </div>
-            )}
-            {!contourData && (
-              <div style={{ marginTop: '5px', fontSize: '12px', color: '#dc3545' }}>
-                ⏳ 등고선 데이터 로딩 중...
-              </div>
-            )}
-          </div>
-        )}
 
         {errorMessage && (
           <div style={{ padding: '8px', color: '#d32f2f', backgroundColor: '#ffebee', borderRadius: '4px' }}>
@@ -710,7 +967,8 @@ function App() {
       {/* 지도 */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
         <MapContainer
-          center={coords ? [parseFloat(coords.lat), parseFloat(coords.lng)] : [37.5665, 126.978]}
+          key={mapKey}
+          center={singleCoords ? [parseFloat(singleCoords.lat), parseFloat(singleCoords.lng)] : [37.5665, 126.978]}
           zoom={13}
           style={{ flex: 1, width: '100%', border: '1px solid #ddd', borderRadius: '8px' }}
         >
@@ -719,87 +977,73 @@ function App() {
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
 
-          {coords && <MapCenterUpdater coords={coords} />}
+          {/* 센터/뷰 업데이트 */}
+          {coords1 && coords2
+            ? <FitBoundsToOrigins coords1={coords1} coords2={coords2} />
+            : (singleCoords && <MapCenterUpdater coords={singleCoords} />)
+          }
 
-          {/* 선택 위치 마커 (기준 위치) */}
-          {coords && (
-            <Marker position={[parseFloat(coords.lat), parseFloat(coords.lng)]} icon={getSelectedLocationIcon()}>
-              <Popup>
-                <strong>📍 선택한 위치</strong>
-                <br />
-                {address && !address.includes('위도') && !address.includes('경도')
-                  ? address
-                  : `위도: ${parseFloat(coords.lat).toFixed(4)}, 경도: ${parseFloat(coords.lng).toFixed(4)}`}
-                <br />
-                <button
-                  onClick={() => {
-                    const lat = parseFloat(coords.lat);
-                    const lng = parseFloat(coords.lng);
-                    openNaverRoomsAt(lat, lng);
-                  }}
-                  style={{
-                    marginTop: '5px',
-                    padding: '5px 10px',
-                    backgroundColor: '#00C73C',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '3px',
-                    cursor: 'pointer',
-                    fontSize: '12px'
-                  }}
-                >
-                  🏠 매물 보기
-                </button>
-              </Popup>
+          {/* 주소 마커 */}
+          {coords1 && (
+            <Marker position={[parseFloat(coords1.lat), parseFloat(coords1.lng)]} icon={getSelectedLocationIcon1()}>
+              <Popup><strong>📍 주소1</strong><br />{address1}</Popup>
+            </Marker>
+          )}
+          {coords2 && (
+            <Marker position={[parseFloat(coords2.lat), parseFloat(coords2.lng)]} icon={getSelectedLocationIcon2()}>
+              <Popup><strong>📍 주소2</strong><br />{address2}</Popup>
             </Marker>
           )}
 
-          {/* 가장 가까운 역 마커 */}
-          {nearestStation && (
-            <Marker
-              position={[
-                Number((nearestStation as any).lat),
-                Number((nearestStation as any).lng),
-              ]}
-              icon={getNearestStationIcon()}
-            >
-              <Popup>
-                <strong>🚇 가장 가까운 역</strong>
-                <br />
-                {(nearestStation as any).name}
-                <br />
-                거리:{' '}
-                {((nearestStation as any).distance_km ?? (nearestStation as any).distance) ?? '—'} km
-              </Popup>
+          {/* 최근접역 마커 */}
+          {nearest1 && (
+            <Marker position={[Number(nearest1.lat), Number(nearest1.lng)]} icon={getNearestStationIcon1()}>
+              <Popup><strong>🚇 최근접역(주소1)</strong><br />{nearest1.name}</Popup>
+            </Marker>
+          )}
+          {nearest2 && (
+            <Marker position={[Number(nearest2.lat), Number(nearest2.lng)]} icon={getNearestStationIcon2()}>
+              <Popup><strong>🚇 최근접역(주소2)</strong><br />{nearest2.name}</Popup>
             </Marker>
           )}
 
-          {/* 색상 레이어 */}
-          {nearestStation && (
-            <UnifiedColorContours contourData={contourData} nearestStation={nearestStation} />
-          )}
-
-          {/* 커서 툴팁: 핀이 있을 땐 비활성화 */}
-          {nearestStation && (
-            <CursorFollowerTooltip
-              contourData={contourData}
-              originStationName={nearestStation?.name}
-              disabled={!!pinned}
-            />
+          {/* 컬러 레이어 & 커서 툴팁 */}
+          {isSumMode ? (
+            <>
+              <UnifiedColorContoursSum contour1={contour1} contour2={contour2} />
+              <CursorFollowerTooltipSum
+                contour1={contour1}
+                contour2={contour2}
+                origin1Name={nearest1?.name}
+                origin2Name={nearest2?.name}
+                disabled={!!pinned}
+              />
+            </>
+          ) : (
+            singleNearest && singleContour && (
+              <>
+                <UnifiedColorContours contourData={singleContour} nearestStation={singleNearest} />
+                <CursorFollowerTooltip
+                  contourData={singleContour}
+                  originStationName={singleNearest?.name}
+                  disabled={!!pinned}
+                />
+              </>
+            )
           )}
 
           {/* 핀 고정 툴팁 */}
           {pinned && (
             <PinnedTooltip
               pinned={pinned}
-              originCoords={coords}
-              originStationName={nearestStation?.name}
+              originCoords={isSumMode ? null : singleCoords}
+              originStationName={isSumMode ? undefined : singleNearest?.name}
               onClose={() => setPinned(null)}
             />
           )}
 
           {/* 범례 */}
-          <Legend />
+          <Legend isSumMode={isSumMode} />
 
           {/* 클릭 처리 */}
           <ClickableMap onClickMap={handleMapClick} />
