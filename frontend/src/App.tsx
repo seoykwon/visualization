@@ -17,6 +17,10 @@ import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 
+// 파일 맨 위 근처
+const API_BASE = import.meta.env.VITE_API_BASE || ""; // Vercel/로컬에서 주입
+const api = axios.create({ baseURL: API_BASE });      // baseURL만 바꾸면 전체가 따라감
+
 // ─────────────────────────────────────────────────────
 // 0) Leaflet 기본 마커 이미지 설정
 // ─────────────────────────────────────────────────────
@@ -515,7 +519,8 @@ function App() {
 
   const reverseGeocode = async (lat: string, lng: string): Promise<string> => {
     try {
-      const response = await axios.post('http://localhost:5000/api/reverse-geocode', {
+      // const response = await axios.post('http://localhost:5000/api/reverse-geocode', {
+      const response = await api.post('/api/reverse-geocode', {
         lat: parseFloat(lat), lng: parseFloat(lng),
       });
       const addr = response?.data?.address;
@@ -534,11 +539,13 @@ function App() {
 
   const findNearestStation = async (lat: number, lng: number) => {
     try {
-      const response = await axios.post('http://localhost:5000/api/nearest-station', { lat, lng });
+      // const response = await axios.post('http://localhost:5000/api/nearest-station', { lat, lng });
+      const response = await api.post('/api/nearest-station', { lat, lng });
       setNearestStation(response.data);
       if (response.data?.name) {
         try {
-          const contourResponse = await axios.post('http://localhost:5000/api/contour-data', {
+          // const contourResponse = await axios.post('http://localhost:5000/api/contour-data', {
+          const contourResponse = await api.post('/api/contour-data', {
             station_name: response.data.name
           });
           setContourData(contourResponse.data);
@@ -556,7 +563,8 @@ function App() {
     if (!address.trim()) return;
     setLoading(true);
     try {
-      const response = await axios.post('http://localhost:5000/api/geocode', { address });
+      // const response = await axios.post('http://localhost:5000/api/geocode', { address });
+      const response = await api.post('/api/geocode', { address });
       const newCoords = { lat: response.data.lat, lng: response.data.lng };
       setCoords(newCoords);
       setHasOrigin(true); // ★ 기준 위치 확정
