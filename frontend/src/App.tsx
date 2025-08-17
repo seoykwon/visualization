@@ -167,7 +167,7 @@ function createNearestNeighborGrid(
   if (!allStations.length) return [];
 
   const area =
-    bounds || { north: 37.70, south: 37.43, east: 127.27, west: 126.70 };
+    bounds || { north: 37.70, south: 37.20, east: 127.27, west: 126.70 };
 
   const cells: { bounds: [number, number][], color: string, time: number }[] = [];
   for (let lat = area.south; lat < area.north; lat += gridSizeDeg) {
