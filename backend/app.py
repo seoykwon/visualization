@@ -120,9 +120,10 @@ def geocode():
     return jsonify({"error": "Address not found"}), 404
 
 # 등고선 데이터 생성 함수
-def generate_contour_data(start_station_name, time_intervals=[10, 20, 30, 40, 50]):
+def generate_contour_data(start_station_name, time_intervals=[10, 20, 30, 40, 50, 60, 70, 80, 90, 100]):
     """
     시작 역으로부터 각 시간 단위별로 도달 가능한 역들을 그룹화하여 등고선 데이터 생성
+    50분 초과 데이터도 포함하여 처리
     """
     if TRAVEL_TIMES_DF is None:
         return {"error": "Travel time data not available"}
