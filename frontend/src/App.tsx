@@ -66,25 +66,48 @@ const timeColors: Record<number, string> = {
   30: '#FFFF00',
   40: '#FFA500',
   50: '#FF4500',
+  60: '#FF0000',
+  70: '#8B0000',
+  80: '#4B0082',
+  90: '#2F4F4F',
+  100: '#000000',
 };
-const overTimeColor = '#808080'; // 50분 초과
+const overTimeColor = '#808080'; // 100분 초과
 const thresholdsAsc = Object.keys(timeColors).map(Number).sort((a, b) => a - b);
 
-function getTimeColor(time: number): string {
-  if (time > 50) return overTimeColor;
-  for (const t of thresholdsAsc) {
-    if (time <= t) return timeColors[t];
+function getTimeColor(time: number, isSumMode: boolean = false): string {
+  if (isSumMode) {
+    // 다중모드: 20, 40, 60, 80분 기준
+    if (time <= 20) return timeColors[20];
+    if (time <= 40) return timeColors[40];
+    if (time <= 60) return timeColors[60];
+    if (time <= 80) return timeColors[80];
+    return overTimeColor; // 80분 초과
+  } else {
+    // 단일모드: 기존 50분까지
+    if (time > 50) return overTimeColor;
+    for (const t of [10, 20, 30, 40, 50]) {
+      if (time <= t) return timeColors[t];
+    }
+    return overTimeColor;
   }
-  return overTimeColor;
 }
 
 const legendItems = [
-  { label: '10분 이하', color: timeColors[10] },
-  { label: '20분 이하', color: timeColors[20] },
-  { label: '30분 이하', color: timeColors[30] },
-  { label: '40분 이하', color: timeColors[40] },
-  { label: '50분 이하', color: timeColors[50] },
+  { label: '0~10분', color: timeColors[10] },
+  { label: '11~20분', color: timeColors[20] },
+  { label: '21~30분', color: timeColors[30] },
+  { label: '31~40분', color: timeColors[40] },
+  { label: '41~50분', color: timeColors[50] },
   { label: '50분 초과', color: overTimeColor },
+];
+
+const legendItemsSum = [
+  { label: '0~20분', color: timeColors[20] },
+  { label: '21~40분', color: timeColors[40] },
+  { label: '41~60분', color: timeColors[60] },
+  { label: '61~80분', color: timeColors[80] },
+  { label: '80분 초과', color: overTimeColor },
 ];
 
 // ─────────────────────────────────────────────────────
@@ -110,6 +133,10 @@ function getNearestStationTime(lat: number, lng: number, stations: Station[]) {
       minD = d;
       time = s.time;
     }
+  }
+  // 자기자신이 목적지일 때는 0분 반환 (거리가 매우 가까울 때)
+  if (minD < 0.1) { // 100m 이내
+    return 0;
   }
   return time;
 }
@@ -174,21 +201,36 @@ function buildTimeMapByName(contourData: ContourData | null): Map<string, number
   const m = new Map<string, number>();
   if (!contourData) return m;
   
+  // 역명 정규화 함수 (백엔드에서 이미 정규화된 역명을 반환하므로 단순화)
+  const normalizeStationName = (name: string): string => {
+    // 백엔드에서 이미 정규화된 역명을 반환하므로 추가 정규화 없이 그대로 사용
+    return name.trim();
+  };
+  
   // 모든 시간대의 스테이션을 순회하면서 시간 정보 수집
   Object.values(contourData).forEach((timeData) => {
     (timeData.stations || []).forEach((station) => {
       const time = Number(station.time);
       if (Number.isFinite(time)) {
+        const normalizedName = normalizeStationName(station.name);
         // 같은 역이 여러 시간대에 있을 수 있으므로, 더 작은 시간을 우선 선택
-        const existingTime = m.get(station.name);
+        const existingTime = m.get(normalizedName);
         if (existingTime === undefined || time < existingTime) {
-          m.set(station.name, time);
+          m.set(normalizedName, time);
         }
       }
     });
   });
   
   console.log(`Built time map with ${m.size} stations:`, Array.from(m.entries()).slice(0, 5));
+  // 무악재와 관악산 관련 역들 확인
+  const relevantStations = Array.from(m.entries()).filter(([name, time]) => 
+    name.includes('무악재') || name.includes('관악산')
+  );
+  if (relevantStations.length > 0) {
+    console.log('Relevant stations in time map:', relevantStations);
+    console.log('Relevant stations details:', relevantStations.map(([name, time]) => `${name}: ${time}분`));
+  }
   return m;
 }
 
@@ -226,8 +268,23 @@ function createNearestNeighborGrid(
   });
   if (!allStations.length) return [];
 
-  const area =
-    bounds || { north: 37.70, south: 37.43, east: 127.27, west: 126.70 };
+  // 역들의 위치를 기반으로 동적으로 경계 계산
+  const lats = allStations.map(s => s.lat);
+  const lngs = allStations.map(s => s.lng);
+  
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLng = Math.min(...lngs);
+  const maxLng = Math.max(...lngs);
+  
+  // 경계에 여백 추가 (0.02도 = 약 2km)
+  const padding = 0.02;
+  const area = bounds || {
+    north: maxLat + padding,
+    south: minLat - padding,
+    east: maxLng + padding,
+    west: minLng - padding
+  };
 
   const cells: { bounds: [number, number][], color: string, time: number }[] = [];
   for (let lat = area.south; lat < area.north; lat += gridSizeDeg) {
@@ -351,6 +408,7 @@ const getNearestStationIcon2 = () => makeMarkerIcon('N2', '#00B8D9');  // 역2
 /** 7) 범례 (legendItems만 사용 → 지도와 100% 일치) */
 // ─────────────────────────────────────────────────────
 function Legend({ isSumMode = false }: { isSumMode?: boolean }) {
+  const items = isSumMode ? legendItemsSum : legendItems;
   return (
     <div style={{
       position: 'absolute',
@@ -361,24 +419,24 @@ function Legend({ isSumMode = false }: { isSumMode?: boolean }) {
       borderRadius: '5px',
       boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
       zIndex: 1000,
-      minWidth: '200px'
+      minWidth: '200px',
+      maxHeight: '80vh',
+      overflowY: 'auto'
     }}>
       <h4 style={{ margin: '0 0 10px 0', fontSize: '14px' }}>
-        {isSumMode ? '합계 도달 시간(분)' : '도달 시간(분)'}
+        {isSumMode ? '합계 소요 시간' : '소요 시간'}
       </h4>
-      {legendItems.map((item) => (
-        <div key={item.label} style={{ display: 'flex', alignItems: 'center', marginBottom: '6px', fontSize: '12px' }}>
+      {items.map((item) => (
+        <div key={item.label} style={{ display: 'flex', alignItems: 'center', marginBottom: '3px', fontSize: '12px' }}>
           <div style={{
-            width: '16px', height: '16px', backgroundColor: item.color,
-            borderRadius: '3px', marginRight: '8px', border: '1px solid rgba(0,0,0,0.1)'
+            width: '14px', height: '14px', backgroundColor: item.color,
+            borderRadius: '2px', marginRight: '6px', border: '1px solid rgba(0,0,0,0.1)'
           }} />
           <span>{item.label}</span>
         </div>
       ))}
       <div style={{ fontSize: '11px', color: '#888', marginTop: '6px' }}>
-        {isSumMode
-          ? <>각 셀은 최근접역 <b>s</b>에 대해 <b>주소1→s 시간 + 주소2→s 시간</b>의 합을 표시합니다.</>
-          : <>각 셀은 해당 위치에서 <b>가장 가까운 역</b>의 소요시간을 나타냅니다.</>}
+        {isSumMode}
       </div>
     </div>
   );
@@ -443,7 +501,24 @@ function UnifiedColorContoursSum({
     console.log('Sample from tmap2:', Array.from(tmap2.entries()).slice(0, 3));
 
     const gridSizeDeg = 0.003;
-    const area = { north: 37.70, south: 37.43, east: 127.27, west: 126.70 };
+    
+    // 역들의 위치를 기반으로 동적으로 경계 계산
+    const lats = geometry.map(s => s.lat);
+    const lngs = geometry.map(s => s.lng);
+    
+    const minLat = Math.min(...lats);
+    const maxLat = Math.max(...lats);
+    const minLng = Math.min(...lngs);
+    const maxLng = Math.max(...lngs);
+    
+    // 경계에 여백 추가 (0.02도 = 약 2km)
+    const padding = 0.02;
+    const area = {
+      north: maxLat + padding,
+      south: minLat - padding,
+      east: maxLng + padding,
+      west: minLng - padding
+    };
 
     const cells: { bounds: [number, number][], color: string, sum: number }[] = [];
     for (let lat = area.south; lat < area.north; lat += gridSizeDeg) {
@@ -454,13 +529,22 @@ function UnifiedColorContoursSum({
         const nearest = getNearestByGeometry(cLat, cLng, geometry);
         if (!nearest) continue;
         const name = nearest.station.name;
+        
+        // 역명 정규화 (백엔드에서 이미 정규화된 역명을 반환하므로 단순화)
+        const normalizeStationName = (name: string): string => {
+          // 백엔드에서 이미 정규화된 역명을 반환하므로 추가 정규화 없이 그대로 사용
+          return name.trim();
+        };
+        const normalizedName = normalizeStationName(name);
 
         // 시간 맵에서 역 이름으로 조회 (없으면 보수적으로 60분)
-        const t1 = tmap1.get(name) ?? 60;
-        const t2 = tmap2.get(name) ?? 60;
+        const t1 = tmap1.get(normalizedName) ?? 60;
+        const t2 = tmap2.get(normalizedName) ?? 60;
         const sum = Math.round(t1 + t2);
+        
 
-        const color = getTimeColor(sum); // ★ 기존 팔레트 재사용(원하면 threshold 조정 가능)
+
+        const color = getTimeColor(sum, true); // ★ 합계 모드용 색상 팔레트 사용
 
         const poly: [number, number][] = [
           [lat, lng],
@@ -556,13 +640,13 @@ function CursorFollowerTooltip({
     <Marker position={[pos.lat, pos.lng]} opacity={0} interactive={false} keyboard={false}>
       <Tooltip permanent direction="top" offset={[0, -10]} interactive>
         <div style={{ fontSize: 12, lineHeight: 1.4 }}>
-          <div><b>커서 최근접역</b>: {info.nearName}</div>
+          <div><b>역명</b>: {info.nearName}</div>
           {originStationName ? (
             <div><b>{originStationName}</b> ↔ <b>{info.nearName}</b> : {info.timeMin}분</div>
           ) : (
             <div>소요시간: {info.timeMin}분</div>
           )}
-          <div style={{ color: '#666' }}>(커서↔역: {info.distanceKm.toFixed(2)} km)</div>
+          <div style={{ color: '#666' }}>(현위치↔역: {info.distanceKm.toFixed(2)} km)</div>
         </div>
       </Tooltip>
     </Marker>
@@ -609,11 +693,18 @@ function CursorFollowerTooltipSum({
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
       setPos({ lat, lng });
 
-      const nearest = getNearestByGeometry(lat, lng, geometry);
+                   const nearest = getNearestByGeometry(lat, lng, geometry);
       if (!nearest) { setInfo(null); return; }
       const name = nearest.station.name;
-      const t1 = tmap1.get(name) ?? 60;
-      const t2 = tmap2.get(name) ?? 60;
+      
+             // 역명 정규화 (백엔드에서 이미 정규화된 역명을 반환하므로 단순화)
+       const normalizeStationName = (name: string): string => {
+         // 백엔드에서 이미 정규화된 역명을 반환하므로 추가 정규화 없이 그대로 사용
+         return name.trim();
+       };
+      const normalizedName = normalizeStationName(name);
+      const t1 = tmap1.get(normalizedName) ?? 60;
+      const t2 = tmap2.get(normalizedName) ?? 60;
       setInfo({ nearName: name, t1, t2, sum: Math.round(t1 + t2), distanceKm: nearest.distanceKm });
     };
     const onOut = () => { setPos(null); setInfo(null); };
@@ -680,7 +771,7 @@ function PinnedTooltip({
           </div>
 
           <div style={{ marginTop: 4 }}>
-            <div><b>최근접역</b>: {pinned.nearName}</div>
+            <div><b>역명</b>: {pinned.nearName}</div>
             {originStationName ? (
               <div><b>{originStationName}</b> ↔ <b>{pinned.nearName}</b> : {pinned.timeMin}분</div>
             ) : (
@@ -702,7 +793,7 @@ function PinnedTooltip({
                 color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer'
               }}
             >
-              🏠 매물 보기
+              매물 보기
             </button>
 
             <button
@@ -724,7 +815,7 @@ function PinnedTooltip({
                 color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer'
               }}
             >
-              🚇 지하철 경로
+              지하철 경로
             </button>
           </div>
         </div>
@@ -869,9 +960,9 @@ function App() {
 
   // 클릭 시 핀 고정(단일/합계 분기)
   const handleMapClick = (lat: number, lng: number) => {
-    const isSumMode = Boolean(nearest1 && nearest2 && contour1 && contour2);
+    const currentIsSumMode = Boolean(nearest1 && nearest2 && contour1 && contour2);
 
-    if (isSumMode) {
+    if (currentIsSumMode) {
       const byName = new Map<string, Station>();
       [...collectStationsOnlyGeometry(contour1), ...collectStationsOnlyGeometry(contour2)]
         .forEach((s) => { if (!byName.has(s.name)) byName.set(s.name, s); });
@@ -879,11 +970,18 @@ function App() {
       const nearest = getNearestByGeometry(lat, lng, geometry);
       if (!nearest) return;
 
-      const tmap1 = buildTimeMapByName(contour1);
-      const tmap2 = buildTimeMapByName(contour2);
-      const name = nearest.station.name;
-      const t1 = tmap1.get(name) ?? 60;
-      const t2 = tmap2.get(name) ?? 60;
+             const tmap1 = buildTimeMapByName(contour1);
+       const tmap2 = buildTimeMapByName(contour2);
+       const name = nearest.station.name;
+       
+       // 역명 정규화 (백엔드에서 이미 정규화된 역명을 반환하므로 단순화)
+       const normalizeStationName = (name: string): string => {
+         // 백엔드에서 이미 정규화된 역명을 반환하므로 추가 정규화 없이 그대로 사용
+         return name.trim();
+       };
+       const normalizedName = normalizeStationName(name);
+       const t1 = tmap1.get(normalizedName) ?? 60;
+       const t2 = tmap2.get(normalizedName) ?? 60;
       const sum = Math.round(t1 + t2);
 
       setPinned({
@@ -917,6 +1015,17 @@ function App() {
   const singleCoords = coords1 ?? coords2;
   const singleNearest = nearest1 ?? nearest2;
   const singleContour = contour1 ?? contour2;
+  
+  // 디버깅: 합계 모드 상태 확인
+  console.log('Sum mode debug:', {
+    isSumMode,
+    hasNearest1: !!nearest1,
+    hasNearest2: !!nearest2,
+    hasContour1: !!contour1,
+    hasContour2: !!contour2,
+    address1: address1.trim(),
+    address2: address2.trim()
+  });
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
@@ -932,14 +1041,14 @@ function App() {
             type="text"
             value={address1}
             onChange={(e) => setAddress1(e.target.value)}
-            placeholder="📍 주소 1 입력(필수 또는 단일 검색)"
+            placeholder="첫 번째 주소를 입력해주세요(필수)"
             style={{ width: '280px', padding: '8px', fontSize: '14px' }}
           />
           <input
             type="text"
             value={address2}
             onChange={(e) => setAddress2(e.target.value)}
-            placeholder="📍 주소 2 입력(선택)"
+            placeholder="두 번째 주소를 입력해주세요(선택)"
             style={{ width: '280px', padding: '8px', fontSize: '14px' }}
           />
           <button
@@ -956,6 +1065,32 @@ function App() {
             초기화
           </button>
         </div>
+
+        {/* 검색 결과 정보 */}
+        {(coords1 || coords2) && (
+          <div style={{ padding: '10px', backgroundColor: '#e8f4f8', borderRadius: '5px', fontSize: '14px' }}>
+            {coords1 && (
+              <div style={{ marginBottom: coords2 ? '10px' : '0' }}>
+                <strong>📍 주소1:</strong> {address1}
+                {nearest1 && (
+                  <div style={{ marginTop: '5px', fontSize: '12px', color: '#28a745' }}>
+                    🚇 인근 지하철역: {nearest1.name} (거리: {((nearest1 as any).distance_km ?? (nearest1 as any).distance) ?? '—'} km)
+                  </div>
+                )}
+              </div>
+            )}
+            {coords2 && (
+              <div>
+                <strong>📍 주소2:</strong> {address2}
+                {nearest2 && (
+                  <div style={{ marginTop: '5px', fontSize: '12px', color: '#28a745' }}>
+                    🚇 인근 지하철역: {nearest2.name} (거리: {((nearest2 as any).distance_km ?? (nearest2 as any).distance) ?? '—'} km)
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {errorMessage && (
           <div style={{ padding: '8px', color: '#d32f2f', backgroundColor: '#ffebee', borderRadius: '4px' }}>

@@ -137,6 +137,10 @@ def generate_contour_data(start_station_name, time_intervals=[10, 20, 30, 40, 50
         name = re.sub(r'\s*우이신설선', '', name)
         name = re.sub(r'\s*의정부경전철', '', name)
         name = re.sub(r'\s*에버라인', '', name)
+        name = re.sub(r'\s*신림선', '', name)
+        name = re.sub(r'\s*분당선', '', name)
+        name = re.sub(r'\s*공항철도', '', name)
+        name = re.sub(r'\s*신분당선', '', name)
         return name.strip()
     
     # CSV에서 역명 찾기 (정규화된 이름으로 매칭)
