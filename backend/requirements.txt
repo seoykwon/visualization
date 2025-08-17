@@ -187,3 +187,5 @@ xlrd==2.0.2
 zipp==3.23.0
 zope.interface==7.2
 gunicorn>=21.2
+flask>=2.3
+flask-cors>=3.0
