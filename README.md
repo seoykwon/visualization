@@ -46,4 +46,7 @@
       - **Checkout** -> switch to branch
       - **Commit** -> stage changes & commit
       - **Push** -> send branch to remote
-      - **Create pull / Merge request** -> right-click branch -> "create pull request"  
+      - **Create pull / Merge request** -> right-click branch -> "create pull request"
+  
+### Final Presentation  
+[Seoul Accessibility Map](https://www.canva.com/design/DAGwAA7TLLM/I1hfQsNk6smUWo2N4fnXiA/edit?utm_content=DAGwAA7TLLM&utm_campaign=designshare&utm_medium=link2&utm_source=sharebutton)
